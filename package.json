@@ -1,0 +1,28 @@
+{
+    "name": "@banaxi/banana-code",
+    "version": "1.0.5",
+    "description": "🍌 BananaCode",
+    "type": "module",
+    "license": "GPL-3.0-or-later",
+    "bin": {
+        "banana": "bin/banana.js"
+    },
+    "publishConfig": {
+        "access": "public"
+    },
+    "engines": {
+        "node": ">=18.0.0"
+    },
+    "dependencies": {
+        "@anthropic-ai/sdk": "^0.36.1",
+        "@google/generative-ai": "^0.21.0",
+        "@inquirer/prompts": "^7.2.3",
+        "@openai/codex": "^0.117.0",
+        "chalk": "^5.4.1",
+        "diff": "^8.0.4",
+        "glob": "13.0.6",
+        "open": "^11.0.0",
+        "openai": "^4.79.1",
+        "ora": "^8.1.1"
+    }
+}

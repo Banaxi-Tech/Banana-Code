@@ -1,0 +1,9 @@
+.git
+convert.py
+your_image.png
+*.log
+tests/
+node_modules
+.env
+.DS_Store
+.vscode

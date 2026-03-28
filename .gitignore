@@ -1,0 +1,15 @@
+# General
+.DS_Store
+.vscode
+
+# Environment and Dependencies
+.env
+node_modules/
+
+# Project Specific
+convert.py
+your_image.png
+
+# Logs and Tests
+*.log
+tests/
