@@ -6,7 +6,7 @@ import { execSync } from 'child_process';
 import fsSync from 'fs';
 import chalk from 'chalk';
 
-import { GEMINI_MODELS, CLAUDE_MODELS, OPENAI_MODELS, CODEX_MODELS, OLLAMA_CLOUD_MODELS } from './constants.js';
+import { GEMINI_MODELS, CLAUDE_MODELS, OPENAI_MODELS, CODEX_MODELS, OLLAMA_CLOUD_MODELS, MISTRAL_MODELS } from './constants.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.config', 'banana-code');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
@@ -74,6 +74,27 @@ export async function setupProvider(provider, config = {}) {
             message: 'Select a Claude model:',
             choices: CLAUDE_MODELS
         });
+    } else if (provider === 'mistral') {
+        config.apiKey = await input({
+            message: 'Enter your MISTRAL_API_KEY (from console.mistral.ai):',
+            default: config.apiKey
+        });
+        
+        const choices = [...MISTRAL_MODELS, { name: chalk.magenta('✎ Enter custom model ID...'), value: 'CUSTOM_ID' }];
+        let selectedModel = await select({
+            message: 'Select a Mistral model:',
+            choices,
+            loop: false,
+            pageSize: Math.max(choices.length, 15)
+        });
+
+        if (selectedModel === 'CUSTOM_ID') {
+            selectedModel = await input({
+                message: 'Enter the exact Mistral model ID (e.g., mistral-large-latest):',
+                validate: (v) => v.trim().length > 0 || 'Model ID cannot be empty'
+            });
+        }
+        config.model = selectedModel;
     } else if (provider === 'openai') {
         const authMethod = await select({
             message: 'How would you like to authenticate with OpenAI?',
@@ -158,6 +179,7 @@ async function runSetupWizard() {
             { name: 'Google Gemini', value: 'gemini' },
             { name: 'Anthropic Claude', value: 'claude' },
             { name: 'OpenAI', value: 'openai' },
+            { name: 'Mistral AI', value: 'mistral' },
             { name: 'Ollama Cloud', value: 'ollama_cloud' },
             { name: 'Ollama (Local)', value: 'ollama' }
         ]

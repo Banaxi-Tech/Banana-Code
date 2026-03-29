@@ -8,6 +8,7 @@ import { duckDuckGo } from './duckDuckGo.js';
 import { duckDuckGoScrape } from './duckDuckGoScrape.js';
 import { patchFile } from './patchFile.js';
 import { activateSkill } from './activateSkill.js';
+import { delegateTask } from './delegateTask.js';
 
 export const TOOLS = [
     {
@@ -145,6 +146,29 @@ export const TOOLS = [
             },
             required: ['skillName']
         }
+    },
+    {
+        name: 'delegate_task',
+        label: 'Sub-Agent Delegation (Beta)',
+        description: 'Spawns a specialized sub-agent to handle a specific sub-task. Use this for complex research, big code changes, or detailed reviews to keep the main context clean.',
+        beta: true,
+        parameters: {
+            type: 'object',
+            properties: {
+                task: { type: 'string', description: 'The specific, detailed instruction for the sub-agent.' },
+                agentType: { 
+                    type: 'string', 
+                    description: 'The type of specialist to spawn.',
+                    enum: ['researcher', 'coder', 'reviewer', 'generalist']
+                },
+                contextFiles: {
+                    type: 'array',
+                    description: 'Optional list of file paths to provide as initial context to the sub-agent.',
+                    items: { type: 'string' }
+                }
+            },
+            required: ['task']
+        }
     }
 ];
 
@@ -157,7 +181,7 @@ export function getAvailableTools(config = {}) {
     });
 }
 
-export async function executeTool(name, args) {
+export async function executeTool(name, args, config) {
     switch (name) {
         case 'execute_command': return await execCommand(args);
         case 'read_file': return await readFile(args);
@@ -169,6 +193,7 @@ export async function executeTool(name, args) {
         case 'duck_duck_go_scrape': return await duckDuckGoScrape(args);
         case 'patch_file': return await patchFile(args);
         case 'activate_skill': return await activateSkill(args);
+        case 'delegate_task': return await delegateTask(args, config);
         default: return `Unknown tool: ${name}`;
     }
 }

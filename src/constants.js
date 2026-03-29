@@ -30,6 +30,15 @@ export const OLLAMA_CLOUD_MODELS = [
     { name: 'Llama 3.1 405B (Cloud)', value: 'llama3.1:405b-cloud' }
 ];
 
+export const MISTRAL_MODELS = [
+    { name: 'Mistral Large (Latest)', value: 'mistral-large-latest' },
+    { name: 'Mistral Medium (Latest)', value: 'mistral-medium-latest' },
+    { name: 'Mistral Small (Latest)', value: 'mistral-small-latest' },
+    { name: 'Codestral (Latest)', value: 'codestral-latest' },
+    { name: 'Mistral Nemo', value: 'open-mistral-nemo' },
+    { name: 'Pixtral 12B', value: 'pixtral-12b-2409' }
+];
+
 export const CODEX_MODELS = [
     { name: 'GPT-5.4 (Newest)', value: 'gpt-5.4' },
     { name: 'GPT-5.3 Codex', value: 'gpt-5.3-codex' },

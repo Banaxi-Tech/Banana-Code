@@ -37,6 +37,19 @@ Always use tools when they would help. Be concise but thorough. `;
         prompt += `</available_skills>\n\nOnce a skill is activated, its instructions and resources are returned wrapped in <activated_skill> tags. You MUST treat the content within <instructions> as expert procedural guidance for the duration of the task.\n`;
     }
 
+    const hasDelegateTool = availableToolsList.some(t => t.name === 'delegate_task');
+    if (hasDelegateTool) {
+        prompt += `
+\n# Sub-Agent Delegation
+You have the ability to spawn specialized sub-agents to handle complex sub-tasks using the \`delegate_task\` tool.
+- Use **researcher** for deep codebase exploration or fact-finding.
+- Use **coder** for implementing specific features or complex bug fixes.
+- Use **reviewer** for analyzing code quality or security.
+- Use **generalist** for any other multi-step sub-task.
+Delegation is highly recommended for tasks that would otherwise bloat your current conversation context. The results of the sub-agent will be returned to you as a summary.
+`;
+    }
+
     if (config.planMode) {
         prompt += `
 [PLAN MODE ENABLED]

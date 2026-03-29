@@ -121,7 +121,7 @@ export class OpenAIProvider {
                         args = JSON.parse(call.function.arguments);
                     } catch (e) { }
 
-                    const res = await executeTool(call.function.name, args);
+                    const res = await executeTool(call.function.name, args, this.config);
                     if (this.config.debug) {
                         console.log(chalk.gray(`[DEBUG] Tool Result: ${typeof res === 'string' ? res : JSON.stringify(res, null, 2)}`));
                     }
@@ -371,7 +371,7 @@ export class OpenAIProvider {
                         args = JSON.parse(call.function.arguments);
                     } catch (e) { }
 
-                    const res = await executeTool(call.function.name, args);
+                    const res = await executeTool(call.function.name, args, this.config);
                     if (this.config.debug) {
                         console.log(chalk.gray(`[DEBUG] Tool Result: ${typeof res === 'string' ? res : JSON.stringify(res, null, 2)}`));
                     }

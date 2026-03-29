@@ -114,7 +114,7 @@ export class ClaudeProvider {
                 const toolResultContent = [];
                 for (const call of toolCalls) {
                     console.log(chalk.yellow(`\n[Banana Calling Tool: ${call.name}]`));
-                    const res = await executeTool(call.name, call.input);
+                    const res = await executeTool(call.name, call.input, this.config);
                     if (this.config.debug) {
                         console.log(chalk.gray(`[DEBUG] Tool Result: ${typeof res === 'string' ? res : JSON.stringify(res, null, 2)}`));
                     }

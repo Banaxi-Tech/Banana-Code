@@ -10,6 +10,7 @@ import { ClaudeProvider } from './providers/claude.js';
 import { OpenAIProvider } from './providers/openai.js';
 import { OllamaProvider } from './providers/ollama.js';
 import { OllamaCloudProvider } from './providers/ollamaCloud.js';
+import { MistralProvider } from './providers/mistral.js';
 
 import { loadSession, saveSession, generateSessionId, getLatestSessionId, listSessions } from './sessions.js';
 import { printMarkdown } from './utils/markdown.js';
@@ -28,6 +29,7 @@ function createProvider(overrideConfig = null) {
         case 'gemini': return new GeminiProvider(activeConfig);
         case 'claude': return new ClaudeProvider(activeConfig);
         case 'openai': return new OpenAIProvider(activeConfig);
+        case 'mistral': return new MistralProvider(activeConfig);
         case 'ollama_cloud': return new OllamaCloudProvider(activeConfig);
         case 'ollama': return new OllamaProvider(activeConfig);
         default:
@@ -51,13 +53,14 @@ async function handleSlashCommand(command) {
                         { name: 'Google Gemini', value: 'gemini' },
                         { name: 'Anthropic Claude', value: 'claude' },
                         { name: 'OpenAI', value: 'openai' },
+                        { name: 'Mistral AI', value: 'mistral' },
                         { name: 'Ollama Cloud', value: 'ollama_cloud' },
                         { name: 'Ollama (Local)', value: 'ollama' }
                     ]
                 });
             }
 
-            if (['gemini', 'claude', 'openai', 'ollama_cloud', 'ollama'].includes(newProv)) {
+            if (['gemini', 'claude', 'openai', 'mistral', 'ollama_cloud', 'ollama'].includes(newProv)) {
                 // Use the shared setup logic to get keys/models
                 config = await setupProvider(newProv, config);
                 await saveConfig(config);
@@ -72,13 +75,15 @@ async function handleSlashCommand(command) {
             if (!newModel) {
                 // Interactive selection
                 const { select } = await import('@inquirer/prompts');
-                const { GEMINI_MODELS, CLAUDE_MODELS, OPENAI_MODELS, CODEX_MODELS, OLLAMA_CLOUD_MODELS } = await import('./constants.js');
+                const { GEMINI_MODELS, CLAUDE_MODELS, OPENAI_MODELS, CODEX_MODELS, OLLAMA_CLOUD_MODELS, MISTRAL_MODELS } = await import('./constants.js');
 
                 let choices = [];
                 if (config.provider === 'gemini') choices = GEMINI_MODELS;
                 else if (config.provider === 'claude') choices = CLAUDE_MODELS;
                 else if (config.provider === 'openai') {
                     choices = config.authType === 'oauth' ? CODEX_MODELS : OPENAI_MODELS;
+                } else if (config.provider === 'mistral') {
+                    choices = MISTRAL_MODELS;
                 } else if (config.provider === 'ollama_cloud') {
                     choices = OLLAMA_CLOUD_MODELS;
                 } else if (config.provider === 'ollama') {
@@ -94,7 +99,7 @@ async function handleSlashCommand(command) {
 
                 if (choices.length > 0) {
                     const finalChoices = [...choices];
-                    if (config.provider === 'ollama_cloud') {
+                    if (config.provider === 'ollama_cloud' || config.provider === 'mistral') {
                         finalChoices.push({ name: chalk.magenta('✎ Enter custom model ID...'), value: 'CUSTOM_ID' });
                     }
                     

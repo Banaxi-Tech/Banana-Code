@@ -82,7 +82,7 @@ export class OllamaCloudProvider {
                     const fn = call.function;
                     console.log(chalk.yellow(`\n[Banana Calling Tool: ${fn.name}]`));
 
-                    let res = await executeTool(fn.name, fn.arguments);
+                    let res = await executeTool(fn.name, fn.arguments, this.config);
                     if (this.config.debug) {
                         console.log(chalk.gray(`[DEBUG] Tool Result: ${typeof res === 'string' ? res : JSON.stringify(res, null, 2)}`));
                     }
