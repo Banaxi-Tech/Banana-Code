@@ -1,4 +1,4 @@
-import { getAvailableTools, executeTool } from '../tools/registry.js';
+import { getAvailableTools, executeTool, sanitizeSchemaForStrictAPIs } from '../tools/registry.js';
 import chalk from 'chalk';
 import ora from 'ora';
 import { getSystemPrompt } from '../prompt.js';
@@ -15,7 +15,7 @@ export class OllamaProvider {
             function: {
                 name: t.name,
                 description: t.description,
-                parameters: t.parameters
+                parameters: sanitizeSchemaForStrictAPIs(t.parameters)
             }
         }));
         this.URL = 'http://localhost:11434/api/chat';
@@ -42,13 +42,14 @@ export class OllamaProvider {
                     body: JSON.stringify({
                         model: this.modelName,
                         messages: this.messages,
-                        tools: this.tools,
+                        tools: this.tools.length > 0 ? this.tools : undefined,
                         stream: false
                     })
                 });
 
                 if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
+                    const errorText = await response.text();
+                    throw new Error(`HTTP error! status: ${response.status}, details: ${errorText}`);
                 }
 
                 const data = await response.json();
@@ -76,7 +77,7 @@ export class OllamaProvider {
                     const fn = call.function;
                     console.log(chalk.yellow(`\n[Banana Calling Tool: ${fn.name}]`));
 
-                    let res = await executeTool(fn.name, fn.arguments);
+                    let res = await executeTool(fn.name, fn.arguments, this.config);
                     if (this.config.debug) {
                         console.log(chalk.gray(`[DEBUG] Tool Result: ${typeof res === 'string' ? res : JSON.stringify(res, null, 2)}`));
                     }
@@ -84,6 +85,7 @@ export class OllamaProvider {
 
                     this.messages.push({
                         role: 'tool',
+                        tool_call_id: call.id || 'mcp_call',
                         content: typeof res === 'string' ? res : JSON.stringify(res)
                     });
                 }

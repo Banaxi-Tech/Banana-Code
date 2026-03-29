@@ -15,10 +15,12 @@ import { MistralProvider } from './providers/mistral.js';
 import { loadSession, saveSession, generateSessionId, getLatestSessionId, listSessions } from './sessions.js';
 import { printMarkdown } from './utils/markdown.js';
 import { estimateConversationTokens } from './utils/tokens.js';
+import { mcpManager } from './utils/mcp.js';
 
 let config;
 let providerInstance;
 let currentSessionId;
+let currentSessionTitle = null;
 const commandHistory = [];
 let historyIndex = -1;
 let currentInputSaved = '';
@@ -107,7 +109,7 @@ async function handleSlashCommand(command) {
                         message: 'Select a model:',
                         choices: finalChoices,
                         loop: false,
-                        pageSize: Math.max(finalChoices.length, 15)
+                        pageSize: 10
                     });
 
                     if (newModel === 'CUSTOM_ID') {
@@ -244,6 +246,12 @@ async function handleSlashCommand(command) {
                 checked: (config.betaTools || []).includes('clean_command')
             });
 
+            choices.push({
+                name: 'MCP Support (Model Context Protocol)',
+                value: 'mcp_support',
+                checked: (config.betaTools || []).includes('mcp_support')
+            });
+
             if (choices.length === 0) {
                 console.log(chalk.yellow("No beta features available."));
                 break;
@@ -269,6 +277,12 @@ async function handleSlashCommand(command) {
                     if (idx > -1) enabledBetaTools.splice(idx, 1);
                     console.log(chalk.yellow('DuckDuckGo Scrape was not enabled.'));
                 }
+            }
+
+            if (enabledBetaTools.includes('mcp_support') && !(config.betaTools || []).includes('mcp_support')) {
+                await mcpManager.init();
+            } else if (!enabledBetaTools.includes('mcp_support') && (config.betaTools || []).includes('mcp_support')) {
+                await mcpManager.cleanup();
             }
 
             config.betaTools = enabledBetaTools;
@@ -375,12 +389,39 @@ async function handleSlashCommand(command) {
             if (sessions.length === 0) {
                 console.log(chalk.yellow("No saved chat sessions found."));
             } else {
-                console.log(chalk.cyan.bold("\nRecent Chat Sessions:"));
-                sessions.forEach((s, i) => {
-                    const active = s.uuid === currentSessionId ? chalk.green(' (active)') : '';
-                    console.log(chalk.gray(`${i + 1}. [${s.updatedAt}] ${s.uuid.slice(0, 8)}... (${s.provider}/${s.model})${active}`));
+                const { select: chatSelect } = await import('@inquirer/prompts');
+                const choices = sessions.map(s => {
+                    const active = s.uuid === currentSessionId ? ' (active)' : '';
+                    const date = new Date(s.updatedAt).toLocaleString();
+                    const titleText = s.title ? `"${s.title}"` : s.uuid.slice(0, 8) + '...';
+                    return {
+                        name: `${titleText} - ${date} (${s.provider}/${s.model})${active}`,
+                        value: s.uuid
+                    };
                 });
-                console.log(chalk.gray("\nTo resume a chat, restart with: banana --resume <uuid>\n"));
+                
+                const selectedSessionId = await chatSelect({
+                    message: 'Select a chat session to resume:',
+                    choices: choices,
+                    pageSize: 10,
+                    loop: false
+                });
+
+                if (selectedSessionId && selectedSessionId !== currentSessionId) {
+                    const session = await loadSession(selectedSessionId);
+                    if (session) {
+                        currentSessionId = session.uuid;
+                        currentSessionTitle = session.title || null;
+                        config.provider = session.provider;
+                        config.model = session.model;
+                        providerInstance = createProvider();
+                        if (providerInstance.messages !== undefined) {
+                            providerInstance.messages = session.messages;
+                        }
+                        playHistory(session);
+                        console.log(chalk.green(`Resumed session: ${currentSessionTitle || currentSessionId} (${session.provider}/${session.model})\n`));
+                    }
+                }
             }
             break;
         case '/help':
@@ -428,6 +469,75 @@ function padLine(text, width) {
     const stripped = text.replace(/\x1b\[[0-9;]*m/g, ''); // strip ANSI for length
     const pad = Math.max(0, width - stripped.length);
     return text + ' '.repeat(pad);
+}
+
+function playHistory(session) {
+    process.stdout.write('\x1bc'); // Clear screen
+    console.log(chalk.yellow.bold("🍌 Banana Code — Peeling the project..."));
+    console.log(chalk.gray("-------------------------------------------"));
+    for (const msg of session.messages) {
+        if (msg.role === 'system') continue;
+
+        if (session.provider === 'gemini') {
+            if (msg.role === 'user') {
+                if (msg.parts[0]?.text) console.log(`${chalk.yellow('🍌 >')} ${msg.parts[0].text}`);
+                else if (msg.parts[0]?.functionResponse) {
+                    console.log(chalk.yellow(`[Tool Result Received]`));
+                }
+            } else if (msg.role === 'model') {
+                msg.parts.forEach(p => {
+                    if (p.text) {
+                        if (config.useMarkedTerminal) printMarkdown(p.text);
+                        else process.stdout.write(chalk.cyan(p.text));
+                    }
+                    if (p.functionCall) console.log(chalk.yellow(`\n[Banana Calling Tool: ${p.functionCall.name}]`));
+                });
+                console.log();
+            }
+        } else if (session.provider === 'claude') {
+            if (msg.role === 'user') {
+                if (typeof msg.content === 'string') console.log(`${chalk.yellow('🍌 >')} ${msg.content}`);
+                else {
+                    msg.content.forEach(c => {
+                        if (c.type === 'tool_result') console.log(chalk.yellow(`[Tool Result Received]`));
+                    });
+                }
+            } else if (msg.role === 'assistant') {
+                if (typeof msg.content === 'string') {
+                    if (config.useMarkedTerminal) printMarkdown(msg.content);
+                    else process.stdout.write(chalk.cyan(msg.content));
+                } else {
+                    msg.content.forEach(c => {
+                        if (c.type === 'text') {
+                            if (config.useMarkedTerminal) printMarkdown(c.text);
+                            else process.stdout.write(chalk.cyan(c.text));
+                        }
+                        if (c.type === 'tool_use') console.log(chalk.yellow(`\n[Banana Calling Tool: ${c.name}]`));
+                    });
+                }
+                console.log();
+            }
+        } else {
+            // OpenAI, Ollama, Mistral
+            if (msg.role === 'user') {
+                console.log(`${chalk.yellow('🍌 >')} ${msg.content}`);
+            } else if (msg.role === 'assistant' || msg.role === 'output_text') {
+                if (msg.content) {
+                    if (config.useMarkedTerminal) printMarkdown(msg.content);
+                    else process.stdout.write(chalk.cyan(msg.content));
+                }
+                if (msg.tool_calls) {
+                    msg.tool_calls.forEach(tc => {
+                        const name = tc.function ? tc.function.name : tc.name;
+                        console.log(chalk.yellow(`\n[Banana Calling Tool: ${name}]`));
+                    });
+                }
+                console.log();
+            } else if (msg.role === 'tool') {
+                console.log(chalk.yellow(`[Tool Result Received]`));
+            }
+        }
+    }
 }
 
 let lastPromptRows = 1;
@@ -598,6 +708,7 @@ function promptUser() {
                 process.stdout.write(`\x1b[${moveDown}B\x1b[2K\x1b[1B\x1b[2K\x1b[1G\n`);
                 console.log(chalk.yellow(`\nTo resume this session: node bin/banana.js --resume ${currentSessionId}`));
                 console.log(chalk.yellow("🍌 Bye BananaCode. See ya!"));
+                mcpManager.cleanup();
                 process.exit(0);
             }
         };
@@ -714,6 +825,10 @@ async function main() {
         config = await loadConfig();
         await runStartup();
 
+        if (config.betaTools && config.betaTools.includes('mcp_support')) {
+            await mcpManager.init();
+        }
+
         const resumeIdx = process.argv.indexOf('--resume');
         if (resumeIdx !== -1) {
             let resumeId = process.argv[resumeIdx + 1];
@@ -725,78 +840,15 @@ async function main() {
                 const session = await loadSession(resumeId);
                 if (session) {
                     currentSessionId = session.uuid;
+                    currentSessionTitle = session.title || null;
                     config.provider = session.provider;
                     config.model = session.model;
                     providerInstance = createProvider();
                     if (providerInstance.messages !== undefined) {
                         providerInstance.messages = session.messages;
                     }
-                    console.log(chalk.green(`Resumed session: ${currentSessionId} (${session.provider}/${session.model})\n`));
-
-                    // Playback history
-                    for (const msg of session.messages) {
-                        if (msg.role === 'system') continue;
-
-                        if (config.provider === 'gemini') {
-                            if (msg.role === 'user') {
-                                if (msg.parts[0]?.text) console.log(`${chalk.yellow('🍌 >')} ${msg.parts[0].text}`);
-                                else if (msg.parts[0]?.functionResponse) {
-                                    console.log(chalk.yellow(`[Tool Result Received]`));
-                                }
-                            } else if (msg.role === 'model') {
-                                msg.parts.forEach(p => {
-                                    if (p.text) {
-                                        if (config.useMarkedTerminal) printMarkdown(p.text);
-                                        else process.stdout.write(chalk.cyan(p.text));
-                                    }
-                                    if (p.functionCall) console.log(chalk.yellow(`\n[Banana Calling Tool: ${p.functionCall.name}]`));
-                                });
-                                console.log();
-                            }
-                        } else if (config.provider === 'claude') {
-                            if (msg.role === 'user') {
-                                if (typeof msg.content === 'string') console.log(`${chalk.yellow('🍌 >')} ${msg.content}`);
-                                else {
-                                    msg.content.forEach(c => {
-                                        if (c.type === 'tool_result') console.log(chalk.yellow(`[Tool Result Received]`));
-                                    });
-                                }
-                            } else if (msg.role === 'assistant') {
-                                if (typeof msg.content === 'string') {
-                                    if (config.useMarkedTerminal) printMarkdown(msg.content);
-                                    else process.stdout.write(chalk.cyan(msg.content));
-                                } else {
-                                    msg.content.forEach(c => {
-                                        if (c.type === 'text') {
-                                            if (config.useMarkedTerminal) printMarkdown(c.text);
-                                            else process.stdout.write(chalk.cyan(c.text));
-                                        }
-                                        if (c.type === 'tool_use') console.log(chalk.yellow(`\n[Banana Calling Tool: ${c.name}]`));
-                                    });
-                                }
-                                console.log();
-                            }
-                        } else {
-                            // OpenAI, Ollama
-                            if (msg.role === 'user') {
-                                console.log(`${chalk.yellow('🍌 >')} ${msg.content}`);
-                            } else if (msg.role === 'assistant' || msg.role === 'output_text') {
-                                if (msg.content) {
-                                    if (config.useMarkedTerminal) printMarkdown(msg.content);
-                                    else process.stdout.write(chalk.cyan(msg.content));
-                                }
-                                if (msg.tool_calls) {
-                                    msg.tool_calls.forEach(tc => {
-                                        const name = tc.function ? tc.function.name : tc.name;
-                                        console.log(chalk.yellow(`\n[Banana Calling Tool: ${name}]`));
-                                    });
-                                }
-                                console.log();
-                            } else if (msg.role === 'tool') {
-                                console.log(chalk.yellow(`[Tool Result Received]`));
-                            }
-                        }
-                    }
+                    playHistory(session);
+                    console.log(chalk.green(`Resumed session: ${currentSessionTitle || currentSessionId} (${session.provider}/${session.model})\n`));
                 } else {
                     console.log(chalk.red(`Could not find session ${resumeId}. Starting fresh.`));
                 }
@@ -867,11 +919,53 @@ async function main() {
                 process.stdout.write(chalk.cyan('✦ '));
                 await providerInstance.sendMessage(finalInput);
                 console.log(); // Extra newline after AI response
+
+                // Auto-generate title every 10 messages (or on the 3rd message)
+                const msgLen = providerInstance.messages ? providerInstance.messages.length : 0;
+                if (!currentSessionTitle && msgLen >= 3 || msgLen > 0 && msgLen % 10 === 0) {
+                    const titleSpinner = ora({ text: 'Generating chat title...', color: 'gray', stream: process.stdout }).start();
+                    try {
+                        // Temporarily disable terminal formatting and debug for the title request
+                        const originalUseMarked = config.useMarkedTerminal;
+                        const originalDebug = config.debug;
+                        config.useMarkedTerminal = false;
+                        config.debug = false;
+                        
+                        // Temporarily silence stdout so the model's streaming text doesn't bleed into the terminal
+                        const originalStdoutWrite = process.stdout.write;
+                        process.stdout.write = () => {};
+
+                        const titlePrompt = "SYSTEM: You are a title generator. Based on this conversation, provide a VERY SHORT (2-5 words) title. Reply ONLY with the title string, no quotes or formatting.";
+                        
+                        // Use a temporary provider instance so we never pollute the main history array
+                        const titleProvider = createProvider();
+                        // Deep copy messages so the AI knows the context, but modifications don't leak back
+                        titleProvider.messages = JSON.parse(JSON.stringify(providerInstance.messages));
+                        
+                        let title = '';
+                        try {
+                            title = await titleProvider.sendMessage(titlePrompt);
+                        } finally {
+                            // Always restore stdout even if it crashes
+                            process.stdout.write = originalStdoutWrite;
+                        }
+                        
+                        currentSessionTitle = title.replace(/['"]/g, '').trim();
+
+                        config.useMarkedTerminal = originalUseMarked;
+                        config.debug = originalDebug;
+                    } catch (e) {
+                        // ignore title gen errors
+                    }
+                    titleSpinner.stop();
+                }
+
                 // Save session after AI message
                 await saveSession(currentSessionId, {
                     provider: config.provider,
                     model: config.model || providerInstance.modelName,
-                    messages: providerInstance.messages
+                    messages: providerInstance.messages,
+                    title: currentSessionTitle
                 });
             }
         }

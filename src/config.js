@@ -85,7 +85,7 @@ export async function setupProvider(provider, config = {}) {
             message: 'Select a Mistral model:',
             choices,
             loop: false,
-            pageSize: Math.max(choices.length, 15)
+            pageSize: 10
         });
 
         if (selectedModel === 'CUSTOM_ID') {

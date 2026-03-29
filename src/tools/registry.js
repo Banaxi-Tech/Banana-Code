@@ -9,6 +9,7 @@ import { duckDuckGoScrape } from './duckDuckGoScrape.js';
 import { patchFile } from './patchFile.js';
 import { activateSkill } from './activateSkill.js';
 import { delegateTask } from './delegateTask.js';
+import { mcpManager } from '../utils/mcp.js';
 
 export const TOOLS = [
     {
@@ -173,15 +174,61 @@ export const TOOLS = [
 ];
 
 export function getAvailableTools(config = {}) {
-    return TOOLS.filter(tool => {
+    let available = TOOLS.filter(tool => {
         if (tool.beta) {
             return config.betaTools && config.betaTools.includes(tool.name);
         }
         return true;
     });
+
+    // Add MCP tools if enabled in beta
+    if (config.betaTools && config.betaTools.includes('mcp_support')) {
+        const mcpTools = mcpManager.getTools().map(t => ({
+            name: t.name,
+            description: t.description,
+            parameters: t.inputSchema,
+            isMcp: true
+        }));
+        available = available.concat(mcpTools);
+    }
+
+    return available;
+}
+
+/**
+ * Some providers (Gemini, Ollama) are extremely strict about JSON Schema.
+ * They will throw a 400 if they see "additionalProperties", "$schema", or other unknown fields.
+ */
+export function sanitizeSchemaForStrictAPIs(schema) {
+    if (!schema || typeof schema !== 'object') return schema;
+
+    const sanitized = Array.isArray(schema) ? [] : {};
+
+    for (const [key, value] of Object.entries(schema)) {
+        // Skip keys that strict APIs don't support
+        if (key === 'additionalProperties' || key === '$schema' || key === 'const') {
+            continue;
+        }
+
+        if (typeof value === 'object' && value !== null) {
+            sanitized[key] = sanitizeSchemaForStrictAPIs(value);
+        } else {
+            sanitized[key] = value;
+        }
+    }
+
+    return sanitized;
 }
 
 export async function executeTool(name, args, config) {
+    // Check if it's an MCP tool first
+    if (config.betaTools && config.betaTools.includes('mcp_support')) {
+        const mcpTools = mcpManager.getTools();
+        if (mcpTools.some(t => t.name === name)) {
+            return await mcpManager.callTool(name, args);
+        }
+    }
+
     switch (name) {
         case 'execute_command': return await execCommand(args);
         case 'read_file': return await readFile(args);

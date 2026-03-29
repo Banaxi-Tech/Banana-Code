@@ -1,4 +1,4 @@
-import { getAvailableTools, executeTool } from '../tools/registry.js';
+import { getAvailableTools, executeTool, sanitizeSchemaForStrictAPIs } from '../tools/registry.js';
 import chalk from 'chalk';
 import ora from 'ora';
 import { getSystemPrompt } from '../prompt.js';
@@ -16,7 +16,7 @@ export class OllamaCloudProvider {
             function: {
                 name: t.name,
                 description: t.description,
-                parameters: t.parameters
+                parameters: sanitizeSchemaForStrictAPIs(t.parameters)
             }
         }));
         this.URL = 'https://ollama.com/api/chat';
@@ -60,20 +60,26 @@ export class OllamaCloudProvider {
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
                 let currentChunkResponse = '';
-                let lastMessageObj = null;
+                let lastMessageObj = { role: 'assistant', content: '' };
+                let lineBuffer = '';
 
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) break;
 
                     const chunk = decoder.decode(value, { stream: true });
-                    const lines = chunk.split('\n').filter(l => l.trim() !== '');
+                    lineBuffer += chunk;
+                    const lines = lineBuffer.split('\n');
+                    lineBuffer = lines.pop(); // Keep partial line
 
                     for (const line of lines) {
+                        if (!line.trim()) continue;
                         try {
                             const data = JSON.parse(line);
                             if (data.message) {
-                                lastMessageObj = data.message;
+                                if (data.message.tool_calls) {
+                                    lastMessageObj.tool_calls = data.message.tool_calls;
+                                }
                                 if (data.message.content) {
                                     const content = data.message.content;
                                     if (spinner.isSpinning && !this.config.useMarkedTerminal) spinner.stop();
@@ -84,10 +90,28 @@ export class OllamaCloudProvider {
                                     finalResponse += content;
                                 }
                             }
-                        } catch (e) {
-                            // Ignore partial JSON chunks
-                        }
+                        } catch (e) { }
                     }
+                }
+
+                if (lineBuffer.trim()) {
+                    try {
+                        const data = JSON.parse(lineBuffer);
+                        if (data.message) {
+                            if (data.message.tool_calls) {
+                                lastMessageObj.tool_calls = data.message.tool_calls;
+                            }
+                            if (data.message.content) {
+                                const content = data.message.content;
+                                if (spinner.isSpinning && !this.config.useMarkedTerminal) spinner.stop();
+                                if (!this.config.useMarkedTerminal) {
+                                    process.stdout.write(chalk.cyan(content));
+                                }
+                                currentChunkResponse += content;
+                                finalResponse += content;
+                            }
+                        }
+                    } catch (e) { }
                 }
 
                 if (spinner.isSpinning) spinner.stop();
@@ -96,10 +120,7 @@ export class OllamaCloudProvider {
                     printMarkdown(currentChunkResponse);
                 }
 
-                if (!lastMessageObj) {
-                    throw new Error("Empty response from Ollama Cloud");
-                }
-
+                lastMessageObj.content = currentChunkResponse || '';
                 this.messages.push(lastMessageObj);
 
                 if (!lastMessageObj.tool_calls || lastMessageObj.tool_calls.length === 0) {
@@ -119,6 +140,7 @@ export class OllamaCloudProvider {
 
                     this.messages.push({
                         role: 'tool',
+                        tool_call_id: call.id || 'mcp_call', // Use ID from call if available
                         content: typeof res === 'string' ? res : JSON.stringify(res)
                     });
                 }

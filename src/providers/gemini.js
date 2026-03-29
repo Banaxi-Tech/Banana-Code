@@ -1,4 +1,4 @@
-import { getAvailableTools, executeTool } from '../tools/registry.js';
+import { getAvailableTools, executeTool, sanitizeSchemaForStrictAPIs } from '../tools/registry.js';
 import chalk from 'chalk';
 import ora from 'ora';
 import { getSystemPrompt } from '../prompt.js';
@@ -13,7 +13,7 @@ export class GeminiProvider {
         this.tools = getAvailableTools(config).map(t => ({
             name: t.name,
             description: t.description,
-            parameters: t.parameters
+            parameters: sanitizeSchemaForStrictAPIs(t.parameters)
         }));
         this.systemPrompt = getSystemPrompt(config);
     }

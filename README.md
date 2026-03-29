@@ -49,13 +49,15 @@ While tools like Cursor provide great GUI experiences, Banana Code is built for 
 
 ## ✨ Key Features
 
-- **Multi-Provider Support**: Switch between **Google Gemini**, **Anthropic Claude**, **OpenAI**, **Ollama Cloud**, and **Ollama (Local)** effortlessly.
+- **Multi-Provider Support**: Switch between **Google Gemini**, **Anthropic Claude**, **OpenAI**, **Mistral AI**, **Ollama Cloud**, and **Ollama (Local)** effortlessly.
+- **Model Context Protocol (MCP)**: Connect Banana Code to any community-built MCP server (like SQLite, GitHub, Google Maps) to give your AI infinite new superpowers via `/beta`.
 - **Plan & Agent Modes**: Use `/agent` for instant execution, or `/plan` to make the AI draft a step-by-step implementation plan for your approval before it touches any code.
+- **Hierarchical Sub-Agents**: The main AI can spawn specialized "sub-agents" (Researchers, Coders, Reviewers) to handle complex tasks without polluting your main chat history.
 - **Self-Healing Loop**: If the AI runs a command (like running tests) and it fails, Banana Code automatically feeds the error trace back to the AI so it can fix its own code.
 - **Agent Skills**: Teach your AI specialized workflows. Drop a `SKILL.md` file in your config folder, and the AI will automatically activate it when relevant.
-- **Smart Context**: Use `@file/path.js` to instantly inject file contents into your prompt, or use `/settings` to auto-feed your entire workspace structure (respecting `.gitignore`).
+- **Smart Context & Pruning**: Use `@file/path.js` to instantly inject file contents, auto-feed your workspace, and use `/clean` to instantly compress long chat histories to save tokens.
 - **Web Research**: Deep integration with DuckDuckGo APIs and Scrapers to give the AI real-time access to the internet.
-- **Persistent Sessions**: All chats are saved to `~/.config/banana-code/chats/`. Resume any session with a single command.
+- **Persistent Sessions**: All chats are auto-titled and saved. Use `/chats` for a fully interactive menu to resume any past session.
 - **Syntax Highlighting**: Beautiful, readable markdown output with syntax coloring directly in your terminal.
 
 ## 🚀 Installation
@@ -91,7 +93,14 @@ banana --resume <uuid>
 
 ### In-App Commands
 While in a chat, use these special commands:
+- `/provider`: Switch AI provider (gemini, claude, openai, mistral, ollama_cloud, ollama).
 - `/model`: Switch the active AI model on the fly.
+- `/chats`: Open an interactive menu to view and resume past auto-titled chat sessions.
+- `/clean`: Compress your current chat history into a dense summary to save tokens.
+- `/context`: View your current message count and estimated token usage.
+- `/settings`: Toggle UI features like syntax highlighting and auto-workspace feeding.
+- `/plan` & `/agent`: Toggle between Plan & Execute mode and standard Agent mode.
+- `/beta`: Enable experimental features like MCP Support and Sub-Agents.
 - `/clear`: Clear the current chat history.
 - `/exit` or `CTRL+D`: Save and exit the session.
 
@@ -125,6 +134,26 @@ description: Use this skill whenever you are asked to build or edit a React comp
 - Do not use default exports.
 ```
 3. Type `/skills` in Banana Code to verify it loaded. The AI will now follow these rules automatically!
+
+### 🔌 Model Context Protocol (MCP) Support
+Banana Code supports the open standard [Model Context Protocol](https://modelcontextprotocol.io/), allowing you to plug in community-built servers to give your AI access to your databases, GitHub, Slack, Google Maps, and more.
+
+1. Enable **MCP Support** in the `/beta` menu.
+2. Create a configuration file at `~/.config/banana-code/mcp.json`.
+3. Add your servers. For example, to add the "fetch" and "math" tools using the test server:
+
+```json
+{
+  "mcpServers": {
+    "everything": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-everything"]
+    }
+  }
+}
+```
+
+Restart Banana Code, and the AI will instantly know how to use these new tools natively!
 
 ## 🔐 Privacy & Security
 

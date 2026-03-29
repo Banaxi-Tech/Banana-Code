@@ -21,6 +21,7 @@ export async function saveSession(uuid, data) {
     const filePath = path.join(CHATS_DIR, `${uuid}.json`);
     const sessionData = {
         uuid,
+        title: data.title || null,
         updatedAt: new Date().toISOString(),
         provider: data.provider,
         model: data.model,
