@@ -67,7 +67,7 @@ async function handleSlashCommand(command) {
                 providerInstance = createProvider();
                 console.log(chalk.green(`Switched provider to ${newProv} (${config.model}).`));
             } else {
-                console.log(chalk.yellow(`Usage: /provider <gemini|claude|openai|ollama_cloud|ollama>`));
+                console.log(chalk.yellow(`Usage: /provider <gemini|claude|openai|mistral|ollama_cloud|ollama>`));
             }
             break;
         case '/model':
@@ -386,7 +386,7 @@ async function handleSlashCommand(command) {
         case '/help':
             console.log(chalk.yellow(`
 Available commands:
-  /provider <name> - Switch AI provider (gemini, claude, openai, ollama_cloud, ollama)
+  /provider <name> - Switch AI provider (gemini, claude, openai, mistral, ollama_cloud, ollama)
   /model [name]    - Switch model within current provider (opens menu if name omitted)
   /chats           - List persistent chat sessions
   /clear           - Clear chat history
