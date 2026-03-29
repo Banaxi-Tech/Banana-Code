@@ -6,7 +6,7 @@ import { execSync } from 'child_process';
 import fsSync from 'fs';
 import chalk from 'chalk';
 
-import { GEMINI_MODELS, CLAUDE_MODELS, OPENAI_MODELS, CODEX_MODELS } from './constants.js';
+import { GEMINI_MODELS, CLAUDE_MODELS, OPENAI_MODELS, CODEX_MODELS, OLLAMA_CLOUD_MODELS } from './constants.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.config', 'banana-code');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
@@ -41,10 +41,31 @@ export async function setupProvider(provider, config = {}) {
             default: config.apiKey
         });
         config.model = await select({
-            message: 'Select a Gemini model:',
-            choices: GEMINI_MODELS
+            message: 'Select a model:',
+            choices: OPENAI_MODELS
         });
-    } else if (provider === 'claude') {
+        } else if (provider === 'ollama_cloud') {
+            config.apiKey = await input({
+                message: 'Enter your OLLAMA_API_KEY (from ollama.com):',
+                default: config.apiKey
+            });
+
+            const choices = [...OLLAMA_CLOUD_MODELS, { name: chalk.magenta('✎ Enter custom model ID...'), value: 'CUSTOM_ID' }];
+            let selectedModel = await select({
+                message: 'Select an Ollama Cloud model:',
+                choices,
+                loop: false,
+                pageSize: Math.max(choices.length, 15)
+            });
+
+            if (selectedModel === 'CUSTOM_ID') {
+                selectedModel = await input({
+                    message: 'Enter the exact model ID (e.g., gemma3:27b-cloud):',
+                    validate: (v) => v.trim().length > 0 || 'Model ID cannot be empty'
+                });
+            }
+            config.model = selectedModel;
+        } else if (provider === 'ollama') {
         config.apiKey = await input({
             message: 'Enter your ANTHROPIC_API_KEY:',
             default: config.apiKey
@@ -137,6 +158,7 @@ async function runSetupWizard() {
             { name: 'Google Gemini', value: 'gemini' },
             { name: 'Anthropic Claude', value: 'claude' },
             { name: 'OpenAI', value: 'openai' },
+            { name: 'Ollama Cloud', value: 'ollama_cloud' },
             { name: 'Ollama (Local)', value: 'ollama' }
         ]
     });

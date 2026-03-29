@@ -19,6 +19,17 @@ export const OPENAI_MODELS = [
     { name: 'GPT-5.3 Instant', value: 'gpt-5.3-instant' }
 ];
 
+export const OLLAMA_CLOUD_MODELS = [
+    { name: 'Kimi K2 Thinking (Cloud)', value: 'kimi-k2-thinking:cloud' },
+    { name: 'Kimi K2.5 (Cloud)', value: 'kimi-k2.5:cloud' },
+    { name: 'Qwen 3.5 397B (Cloud)', value: 'qwen3.5:397b-cloud' },
+    { name: 'DeepSeek V3.2 (Cloud)', value: 'deepseek-v3.2:cloud' },
+    { name: 'GLM-5 (Cloud)', value: 'glm-5:cloud' },
+    { name: 'MiniMax M2.7 (Cloud)', value: 'minimax-m2.7:cloud' },
+    { name: 'Llama 3.3 70B (Cloud)', value: 'llama3.3:cloud' },
+    { name: 'Llama 3.1 405B (Cloud)', value: 'llama3.1:405b-cloud' }
+];
+
 export const CODEX_MODELS = [
     { name: 'GPT-5.4 (Newest)', value: 'gpt-5.4' },
     { name: 'GPT-5.3 Codex', value: 'gpt-5.3-codex' },

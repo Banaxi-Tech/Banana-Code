@@ -4,10 +4,11 @@ import ora from 'ora';
 import { getSystemPrompt } from '../prompt.js';
 import { printMarkdown } from '../utils/markdown.js';
 
-export class OllamaProvider {
+export class OllamaCloudProvider {
     constructor(config) {
         this.config = config;
-        this.modelName = config.model || 'llama3';
+        this.apiKey = config.apiKey;
+        this.modelName = config.model || 'llama3.3';
         this.systemPrompt = getSystemPrompt(config);
         this.messages = [{ role: 'system', content: this.systemPrompt }];
         this.tools = getAvailableTools(config).map(t => ({
@@ -18,7 +19,7 @@ export class OllamaProvider {
                 parameters: t.parameters
             }
         }));
-        this.URL = 'http://localhost:11434/api/chat';
+        this.URL = 'https://ollama.com/api/chat';
     }
 
     updateSystemPrompt(newPrompt) {
@@ -31,24 +32,29 @@ export class OllamaProvider {
     async sendMessage(message) {
         this.messages.push({ role: 'user', content: message });
 
-        let spinner = ora({ text: 'Thinking...', color: 'yellow', stream: process.stdout }).start();
+        let spinner = ora({ text: 'Thinking (Cloud)...', color: 'yellow', stream: process.stdout }).start();
         let finalResponse = '';
 
         try {
             while (true) {
                 const response = await fetch(this.URL, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${this.apiKey}`
+                    },
                     body: JSON.stringify({
                         model: this.modelName,
                         messages: this.messages,
-                        tools: this.tools,
-                        stream: false
+                        tools: this.tools.length > 0 ? this.tools : undefined,
+                        stream: false // Cloud API sometimes prefers non-streaming or different SSE formats
                     })
                 });
 
                 if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
+                    const errorText = await response.text();
+                    spinner.stop();
+                    throw new Error(`HTTP ${response.status}: ${errorText}`);
                 }
 
                 const data = await response.json();
@@ -93,8 +99,8 @@ export class OllamaProvider {
 
             return finalResponse;
         } catch (err) {
-            spinner.stop();
-            console.error(chalk.red(`Ollama Error: ${err.message}`));
+            if (spinner.isSpinning) spinner.stop();
+            console.error(chalk.red(`Ollama Cloud Error: ${err.message}`));
             return `Error: ${err.message}`;
         }
     }

@@ -2,6 +2,7 @@ import { getAvailableTools, executeTool } from '../tools/registry.js';
 import chalk from 'chalk';
 import ora from 'ora';
 import { getSystemPrompt } from '../prompt.js';
+import { printMarkdown } from '../utils/markdown.js';
 
 export class GeminiProvider {
     constructor(config) {
@@ -17,6 +18,10 @@ export class GeminiProvider {
         this.systemPrompt = getSystemPrompt(config);
     }
 
+    updateSystemPrompt(newPrompt) {
+        this.systemPrompt = newPrompt;
+    }
+
     async sendMessage(message) {
         this.messages.push({ role: 'user', parts: [{ text: message }] });
 
@@ -25,6 +30,7 @@ export class GeminiProvider {
 
         try {
             while (true) {
+                let currentTurnText = '';
                 const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${this.modelName}:streamGenerateContent?alt=sse&key=${this.apiKey}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -74,9 +80,12 @@ export class GeminiProvider {
                             if (content && content.parts) {
                                 for (const part of content.parts) {
                                     if (part.text) {
-                                        if (spinner && spinner.isSpinning) spinner.stop();
-                                        process.stdout.write(chalk.cyan(part.text));
+                                        if (spinner && spinner.isSpinning && !this.config.useMarkedTerminal) spinner.stop();
+                                        if (!this.config.useMarkedTerminal) {
+                                            process.stdout.write(chalk.cyan(part.text));
+                                        }
                                         responseText += part.text;
+                                        currentTurnText += part.text;
 
                                         // Aggregate sequential text parts
                                         let lastPart = aggregatedParts[aggregatedParts.length - 1];
@@ -108,6 +117,10 @@ export class GeminiProvider {
                 }
 
                 if (spinner && spinner.isSpinning) spinner.stop();
+
+                if (currentTurnText && this.config.useMarkedTerminal) {
+                    printMarkdown(currentTurnText);
+                }
 
                 if (aggregatedParts.length === 0) break;
 

@@ -8,12 +8,17 @@ import { GeminiProvider } from './providers/gemini.js';
 import { ClaudeProvider } from './providers/claude.js';
 import { OpenAIProvider } from './providers/openai.js';
 import { OllamaProvider } from './providers/ollama.js';
+import { OllamaCloudProvider } from './providers/ollamaCloud.js';
 
 import { loadSession, saveSession, generateSessionId, getLatestSessionId, listSessions } from './sessions.js';
+import { printMarkdown } from './utils/markdown.js';
 
 let config;
 let providerInstance;
 let currentSessionId;
+const commandHistory = [];
+let historyIndex = -1;
+let currentInputSaved = '';
 
 function createProvider(overrideConfig = null) {
     const activeConfig = overrideConfig || config;
@@ -21,6 +26,7 @@ function createProvider(overrideConfig = null) {
         case 'gemini': return new GeminiProvider(activeConfig);
         case 'claude': return new ClaudeProvider(activeConfig);
         case 'openai': return new OpenAIProvider(activeConfig);
+        case 'ollama_cloud': return new OllamaCloudProvider(activeConfig);
         case 'ollama': return new OllamaProvider(activeConfig);
         default:
             console.log(chalk.red(`Unknown provider: ${activeConfig.provider}. Defaulting to Ollama.`));
@@ -43,12 +49,13 @@ async function handleSlashCommand(command) {
                         { name: 'Google Gemini', value: 'gemini' },
                         { name: 'Anthropic Claude', value: 'claude' },
                         { name: 'OpenAI', value: 'openai' },
+                        { name: 'Ollama Cloud', value: 'ollama_cloud' },
                         { name: 'Ollama (Local)', value: 'ollama' }
                     ]
                 });
             }
 
-            if (['gemini', 'claude', 'openai', 'ollama'].includes(newProv)) {
+            if (['gemini', 'claude', 'openai', 'ollama_cloud', 'ollama'].includes(newProv)) {
                 // Use the shared setup logic to get keys/models
                 config = await setupProvider(newProv, config);
                 await saveConfig(config);
@@ -63,13 +70,15 @@ async function handleSlashCommand(command) {
             if (!newModel) {
                 // Interactive selection
                 const { select } = await import('@inquirer/prompts');
-                const { GEMINI_MODELS, CLAUDE_MODELS, OPENAI_MODELS, CODEX_MODELS } = await import('./constants.js');
+                const { GEMINI_MODELS, CLAUDE_MODELS, OPENAI_MODELS, CODEX_MODELS, OLLAMA_CLOUD_MODELS } = await import('./constants.js');
 
                 let choices = [];
                 if (config.provider === 'gemini') choices = GEMINI_MODELS;
                 else if (config.provider === 'claude') choices = CLAUDE_MODELS;
                 else if (config.provider === 'openai') {
                     choices = config.authType === 'oauth' ? CODEX_MODELS : OPENAI_MODELS;
+                } else if (config.provider === 'ollama_cloud') {
+                    choices = OLLAMA_CLOUD_MODELS;
                 } else if (config.provider === 'ollama') {
                     try {
                         const response = await fetch('http://localhost:11434/api/tags');
@@ -82,10 +91,25 @@ async function handleSlashCommand(command) {
                 }
 
                 if (choices.length > 0) {
+                    const finalChoices = [...choices];
+                    if (config.provider === 'ollama_cloud') {
+                        finalChoices.push({ name: chalk.magenta('✎ Enter custom model ID...'), value: 'CUSTOM_ID' });
+                    }
+                    
                     newModel = await select({
                         message: 'Select a model:',
-                        choices
+                        choices: finalChoices,
+                        loop: false,
+                        pageSize: Math.max(finalChoices.length, 15)
                     });
+
+                    if (newModel === 'CUSTOM_ID') {
+                        const { input } = await import('@inquirer/prompts');
+                        newModel = await input({
+                            message: 'Enter the exact model ID (e.g., gemma3:27b-cloud):',
+                            validate: (v) => v.trim().length > 0 || 'Model ID cannot be empty'
+                        });
+                    }
                 }
             }
 
@@ -161,27 +185,29 @@ async function handleSlashCommand(command) {
             providerInstance = createProvider(); // Re-init to update tools
             console.log(chalk.green(`Beta tools updated: ${enabledBetaTools.join(', ') || 'none'}`));
             break;
-        case '/reasoning':
-            if (config.provider !== 'openai' || config.authType !== 'oauth') {
-                console.log(chalk.yellow("Reasoning effort is only supported for OpenAI models using OAuth."));
-                break;
-            }
-            const { select: reqSelect } = await import('@inquirer/prompts');
-            const effort = await reqSelect({
-                message: 'Select reasoning effort for OpenAI OAuth models:',
+        case '/settings':
+            const { checkbox: settingsCheckbox } = await import('@inquirer/prompts');
+            const enabledSettings = await settingsCheckbox({
+                message: 'Select features to enable (Space to toggle, Enter to confirm):',
                 choices: [
-                    { name: 'None (Exclude reasoning)', value: 'none' },
-                    { name: 'Low', value: 'low' },
-                    { name: 'Medium (Default)', value: 'medium' },
-                    { name: 'High', value: 'high' },
-                    { name: 'Extra High (xhigh)', value: 'xhigh' }
-                ],
-                default: config.reasoning || 'medium'
+                    {
+                        name: 'Auto-feed workspace files to AI (uses .bananacodeignore / .gitignore)',
+                        value: 'autoFeedWorkspace',
+                        checked: config.autoFeedWorkspace || false
+                    },
+                    {
+                        name: 'Use syntax highlighting for AI output (requires waiting for full response)',
+                        value: 'useMarkedTerminal',
+                        checked: config.useMarkedTerminal || false
+                    }
+                ]
             });
-            config.reasoning = effort;
+            
+            config.autoFeedWorkspace = enabledSettings.includes('autoFeedWorkspace');
+            config.useMarkedTerminal = enabledSettings.includes('useMarkedTerminal');
             await saveConfig(config);
-            providerInstance = createProvider();
-            console.log(chalk.green(`Reasoning effort set to: ${effort}`));
+            providerInstance = createProvider(); // Re-init to update tools/config
+            console.log(chalk.green(`Settings updated.`));
             break;
         case '/debug':
             config.debug = !config.debug;
@@ -212,7 +238,7 @@ Available commands:
   /context         - Show current context window size
   /permissions     - List session-approved permissions
   /beta            - Manage beta features and tools
-  /reasoning       - Set reasoning effort for OpenAI OAuth models
+  /settings        - Manage app settings (workspace auto-feed, etc)
   /debug           - Toggle debug mode (show tool results)
   /help            - Show all commands
   /exit            - Quit Banana Code
@@ -401,6 +427,10 @@ function promptUser() {
 
             if (str === '\r' || str === '\n') {                 // Enter
                 exitRequested = false;
+                if (inputBuffer.trim() && inputBuffer !== commandHistory[commandHistory.length - 1]) {
+                    commandHistory.push(inputBuffer);
+                }
+                historyIndex = -1;
                 resolve(inputBuffer);
                 return;
             }
@@ -431,6 +461,33 @@ function promptUser() {
 
             if (str === '\x1b[C') {                             // Arrow Right
                 if (cursorPos < inputBuffer.length) { cursorPos++; drawPromptBox(inputBuffer, cursorPos); }
+                return;
+            }
+
+            if (str === '\x1b[A') {                             // Arrow Up
+                if (historyIndex === -1) {
+                    currentInputSaved = inputBuffer;
+                }
+                if (historyIndex < commandHistory.length - 1) {
+                    historyIndex++;
+                    inputBuffer = commandHistory[commandHistory.length - 1 - historyIndex];
+                    cursorPos = inputBuffer.length;
+                    drawPromptBox(inputBuffer, cursorPos);
+                }
+                return;
+            }
+
+            if (str === '\x1b[B') {                             // Arrow Down
+                if (historyIndex > -1) {
+                    historyIndex--;
+                    if (historyIndex === -1) {
+                        inputBuffer = currentInputSaved;
+                    } else {
+                        inputBuffer = commandHistory[commandHistory.length - 1 - historyIndex];
+                    }
+                    cursorPos = inputBuffer.length;
+                    drawPromptBox(inputBuffer, cursorPos);
+                }
                 return;
             }
 
@@ -485,20 +542,23 @@ async function main() {
                     for (const msg of session.messages) {
                         if (msg.role === 'system') continue;
 
-                        if (session.provider === 'gemini') {
+                        if (config.provider === 'gemini') {
                             if (msg.role === 'user') {
                                 if (msg.parts[0]?.text) console.log(`${chalk.yellow('🍌 >')} ${msg.parts[0].text}`);
                                 else if (msg.parts[0]?.functionResponse) {
-                                    console.log(chalk.yellow(`[Tool Result: ${msg.parts[0].functionResponse.name}]`));
+                                    console.log(chalk.yellow(`[Tool Result Received]`));
                                 }
                             } else if (msg.role === 'model') {
                                 msg.parts.forEach(p => {
-                                    if (p.text) process.stdout.write(chalk.cyan(p.text));
+                                    if (p.text) {
+                                        if (config.useMarkedTerminal) printMarkdown(p.text);
+                                        else process.stdout.write(chalk.cyan(p.text));
+                                    }
                                     if (p.functionCall) console.log(chalk.yellow(`\n[Banana Calling Tool: ${p.functionCall.name}]`));
                                 });
                                 console.log();
                             }
-                        } else if (session.provider === 'claude') {
+                        } else if (config.provider === 'claude') {
                             if (msg.role === 'user') {
                                 if (typeof msg.content === 'string') console.log(`${chalk.yellow('🍌 >')} ${msg.content}`);
                                 else {
@@ -507,26 +567,36 @@ async function main() {
                                     });
                                 }
                             } else if (msg.role === 'assistant') {
-                                if (typeof msg.content === 'string') console.log(chalk.cyan(msg.content));
-                                else {
+                                if (typeof msg.content === 'string') {
+                                    if (config.useMarkedTerminal) printMarkdown(msg.content);
+                                    else process.stdout.write(chalk.cyan(msg.content));
+                                } else {
                                     msg.content.forEach(c => {
-                                        if (c.type === 'text') process.stdout.write(chalk.cyan(c.text));
+                                        if (c.type === 'text') {
+                                            if (config.useMarkedTerminal) printMarkdown(c.text);
+                                            else process.stdout.write(chalk.cyan(c.text));
+                                        }
                                         if (c.type === 'tool_use') console.log(chalk.yellow(`\n[Banana Calling Tool: ${c.name}]`));
                                     });
-                                    console.log();
                                 }
+                                console.log();
                             }
                         } else {
                             // OpenAI, Ollama
                             if (msg.role === 'user') {
                                 console.log(`${chalk.yellow('🍌 >')} ${msg.content}`);
                             } else if (msg.role === 'assistant' || msg.role === 'output_text') {
-                                if (msg.content) console.log(chalk.cyan(msg.content));
+                                if (msg.content) {
+                                    if (config.useMarkedTerminal) printMarkdown(msg.content);
+                                    else process.stdout.write(chalk.cyan(msg.content));
+                                }
                                 if (msg.tool_calls) {
                                     msg.tool_calls.forEach(tc => {
-                                        console.log(chalk.yellow(`[Banana Calling Tool: ${tc.function.name}]`));
+                                        const name = tc.function ? tc.function.name : tc.name;
+                                        console.log(chalk.yellow(`\n[Banana Calling Tool: ${name}]`));
                                     });
                                 }
+                                console.log();
                             } else if (msg.role === 'tool') {
                                 console.log(chalk.yellow(`[Tool Result Received]`));
                             }
@@ -559,12 +629,19 @@ async function main() {
                 await handleSlashCommand(trimmed);
             } else {
                 let finalInput = trimmed;
-                const fileMentions = trimmed.match(/@([\w/.-]+)/g);
+                const fileMentions = trimmed.match(/@@?([\w/.-]+)/g);
                 if (fileMentions) {
                     let addedFiles = 0;
                     const fsSync = await import('fs');
+                    const path = await import('path');
                     for (const mention of fileMentions) {
-                        const filepath = mention.substring(1);
+                        let filepath;
+                        if (mention.startsWith('@@')) {
+                            filepath = mention.substring(2);
+                        } else {
+                            filepath = path.join(process.cwd(), mention.substring(1));
+                        }
+                        
                         try {
                             const stat = fsSync.statSync(filepath);
                             if (stat.isFile()) {
@@ -578,6 +655,17 @@ async function main() {
                     }
                     if (addedFiles > 0) {
                         console.log(chalk.gray(`(Attached ${addedFiles} file(s) to context)`));
+                    }
+                }
+
+                if (config.autoFeedWorkspace) {
+                    const { getWorkspaceTree } = await import('./utils/workspace.js');
+                    const tree = await getWorkspaceTree();
+                    const { getSystemPrompt } = await import('./prompt.js');
+                    let newSysPrompt = getSystemPrompt(config);
+                    newSysPrompt += `\n\n--- Workspace File Tree ---\n${tree}\n--- End of Tree ---`;
+                    if (typeof providerInstance.updateSystemPrompt === 'function') {
+                        providerInstance.updateSystemPrompt(newSysPrompt);
                     }
                 }
 

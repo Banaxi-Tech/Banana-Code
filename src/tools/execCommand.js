@@ -29,12 +29,16 @@ export async function execCommand({ command, cwd = process.cwd() }) {
 
         child.on('close', (code) => {
             if (spinner.isSpinning) spinner.stop();
-            resolve(`Command exited with code ${code}.\nOutput:\n${output}`);
+            let result = `Command exited with code ${code}.\nOutput:\n${output}`;
+            if (code !== 0) {
+                result += `\n\n[System Note: The command failed with an error. Please analyze the output above and try to fix the issue if it is possible.]`;
+            }
+            resolve(result);
         });
 
         child.on('error', (err) => {
             if (spinner.isSpinning) spinner.stop();
-            resolve(`Error executing command: ${err.message}`);
+            resolve(`Error executing command: ${err.message}\n\n[System Note: The command failed to execute. Please analyze the error and try to fix the issue if it is possible.]`);
         });
     });
 }

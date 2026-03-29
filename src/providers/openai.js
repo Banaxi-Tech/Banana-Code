@@ -6,6 +6,7 @@ import os from 'os';
 import path from 'path';
 import fsSync from 'fs';
 import { getSystemPrompt } from '../prompt.js';
+import { printMarkdown } from '../utils/markdown.js';
 
 export class OpenAIProvider {
     constructor(config) {
@@ -24,6 +25,13 @@ export class OpenAIProvider {
                 parameters: t.parameters
             }
         }));
+    }
+
+    updateSystemPrompt(newPrompt) {
+        this.systemPrompt = newPrompt;
+        if (this.messages.length > 0 && this.messages[0].role === 'system') {
+            this.messages[0].content = newPrompt;
+        }
     }
 
     async sendMessage(message) {
@@ -59,8 +67,10 @@ export class OpenAIProvider {
                     const delta = chunk.choices[0]?.delta;
 
                     if (delta?.content) {
-                        if (spinner.isSpinning) spinner.stop();
-                        process.stdout.write(chalk.cyan(delta.content));
+                        if (spinner.isSpinning && !this.config.useMarkedTerminal) spinner.stop();
+                        if (!this.config.useMarkedTerminal) {
+                            process.stdout.write(chalk.cyan(delta.content));
+                        }
                         chunkResponse += delta.content;
                         finalResponse += delta.content;
                     }
@@ -87,6 +97,7 @@ export class OpenAIProvider {
                 if (spinner.isSpinning) spinner.stop();
 
                 if (chunkResponse) {
+                    if (this.config.useMarkedTerminal) printMarkdown(chunkResponse);
                     this.messages.push({ role: 'assistant', content: chunkResponse });
                 }
 
@@ -213,16 +224,10 @@ export class OpenAIProvider {
                     tools: backendTools,
                     store: false,
                     stream: true,
+                    include: ["reasoning.encrypted_content"],
+                    reasoning: { effort: "medium", summary: "auto" },
                     text: { verbosity: "medium" }
                 };
-
-                const effort = this.config.reasoning || "medium";
-                if (effort !== 'none') {
-                    payload.include = ["reasoning.encrypted_content", "reasoning.content"];
-                    payload.reasoning = { effort: effort, summary: "auto" };
-                } else {
-                    payload.include = [];
-                }
 
                 const response = await fetch('https://chatgpt.com/backend-api/codex/responses', {
                     method: 'POST',
@@ -267,8 +272,10 @@ export class OpenAIProvider {
                                 try {
                                     const data = JSON.parse(currentDataBuffer);
                                     if (currentEvent === 'response.output_text.delta') {
-                                        if (spinner && spinner.isSpinning) spinner.stop();
-                                        process.stdout.write(chalk.cyan(data.delta));
+                                        if (spinner && spinner.isSpinning && !this.config.useMarkedTerminal) spinner.stop();
+                                        if (!this.config.useMarkedTerminal) {
+                                            process.stdout.write(chalk.cyan(data.delta));
+                                        }
                                         currentChunkResponse += data.delta;
                                         finalResponse += data.delta;
                                     } else if (currentEvent === 'response.reasoning.delta' || currentEvent === 'response.reasoning_text.delta' || currentEvent.includes('reasoning.delta')) {
@@ -289,7 +296,7 @@ export class OpenAIProvider {
                                         if (!spinner.isSpinning) {
                                             spinner = ora({ text: `Generating ${chalk.yellow(currentToolCall.name)} (${currentToolCall.arguments.length} bytes)...`, color: 'yellow', stream: process.stdout }).start();
                                         } else {
-                                            spinner.text = `Generating ${chalk.yellow(currentToolCall.name)} (${currentToolCall.arguments.length} bytes)...`;
+                                            spinner.text = `Generating ${chalk.yellow(currentToolCall.name)} arguments (${currentToolCall.arguments.length} bytes)...`;
                                         }
                                     } else if (currentEvent === 'response.output_item.done' && data.item?.type === 'function_call' && currentToolCall) {
                                         if (spinner && spinner.isSpinning) spinner.stop();
@@ -335,7 +342,6 @@ export class OpenAIProvider {
                                 currentChunkResponse += data.delta;
                                 finalResponse += data.delta;
                             }
-                            // Note: tool calls usually don't end exactly at stream end without \n\n
                         } catch (e) { }
                     }
                 }
@@ -343,6 +349,7 @@ export class OpenAIProvider {
                 if (spinner.isSpinning) spinner.stop();
 
                 if (currentChunkResponse) {
+                    if (this.config.useMarkedTerminal) printMarkdown(currentChunkResponse);
                     this.messages.push({ role: 'assistant', content: currentChunkResponse });
                 }
 

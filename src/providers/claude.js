@@ -3,9 +3,11 @@ import { getAvailableTools, executeTool } from '../tools/registry.js';
 import chalk from 'chalk';
 import ora from 'ora';
 import { getSystemPrompt } from '../prompt.js';
+import { printMarkdown } from '../utils/markdown.js';
 
 export class ClaudeProvider {
     constructor(config) {
+        this.config = config;
         this.anthropic = new Anthropic({ apiKey: config.apiKey });
         this.modelName = config.model || 'claude-3-7-sonnet-20250219';
         this.messages = [];
@@ -15,6 +17,10 @@ export class ClaudeProvider {
             input_schema: t.parameters
         }));
         this.systemPrompt = getSystemPrompt(config);
+    }
+
+    updateSystemPrompt(newPrompt) {
+        this.systemPrompt = newPrompt;
     }
 
     async sendMessage(message) {
@@ -47,8 +53,10 @@ export class ClaudeProvider {
 
                 for await (const event of stream) {
                     if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-                        if (spinner.isSpinning) spinner.stop();
-                        process.stdout.write(chalk.cyan(event.delta.text));
+                        if (spinner.isSpinning && !this.config.useMarkedTerminal) spinner.stop();
+                        if (!this.config.useMarkedTerminal) {
+                            process.stdout.write(chalk.cyan(event.delta.text));
+                        }
                         chunkResponse += event.delta.text;
                         finalResponse += event.delta.text;
                     } else if (event.type === 'content_block_start' && event.content_block.type === 'tool_use') {
@@ -76,8 +84,11 @@ export class ClaudeProvider {
                     }
                 }
 
+                if (spinner.isSpinning) spinner.stop();
+
                 const newContent = [];
                 if (chunkResponse) {
+                    if (this.config.useMarkedTerminal) printMarkdown(chunkResponse);
                     newContent.push({ type: 'text', text: chunkResponse });
                 }
 
