@@ -8,6 +8,11 @@ import fsSync from 'fs';
 import { getSystemPrompt } from '../prompt.js';
 import { printMarkdown } from '../utils/markdown.js';
 
+/**
+ * Notice: Parts of the OAuth authentication flow and SSE streaming logic in this file 
+ * are derived from or inspired by the 'opencode-openai-codex-auth' package 
+ * (Copyright (c) 2024-2025 numman-ali). See NOTICE file for full license details.
+ */
 export class OpenAIProvider {
     constructor(config) {
         this.config = config;
