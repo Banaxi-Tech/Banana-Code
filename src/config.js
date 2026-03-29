@@ -41,10 +41,10 @@ export async function setupProvider(provider, config = {}) {
             default: config.apiKey
         });
         config.model = await select({
-            message: 'Select a model:',
-            choices: OPENAI_MODELS
+            message: 'Select a Gemini model:',
+            choices: GEMINI_MODELS
         });
-        } else if (provider === 'ollama_cloud') {
+    } else if (provider === 'ollama_cloud') {
             config.apiKey = await input({
                 message: 'Enter your OLLAMA_API_KEY (from ollama.com):',
                 default: config.apiKey
@@ -65,7 +65,7 @@ export async function setupProvider(provider, config = {}) {
                 });
             }
             config.model = selectedModel;
-        } else if (provider === 'ollama') {
+        } else if (provider === 'claude') {
         config.apiKey = await input({
             message: 'Enter your ANTHROPIC_API_KEY:',
             default: config.apiKey

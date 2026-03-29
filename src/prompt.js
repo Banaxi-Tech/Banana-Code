@@ -1,5 +1,6 @@
 import os from 'os';
 import { getAvailableTools } from './tools/registry.js';
+import { getAvailableSkills } from './utils/skills.js';
 
 export function getSystemPrompt(config = {}) {
     const platform = os.platform();
@@ -16,6 +17,7 @@ export function getSystemPrompt(config = {}) {
     const availableToolsList = getAvailableTools(config);
     const availableToolsNames = availableToolsList.map(t => t.name).join(', ');
     const hasPatchTool = availableToolsList.some(t => t.name === 'patch_file');
+    const skills = getAvailableSkills();
 
     let prompt = `You are Banana Code, a terminal-based AI coding assistant running on ${osDescription}. You help users write, debug, and understand code. You have access to tools: ${availableToolsNames}. 
 
@@ -26,6 +28,26 @@ SAFETY RULES:
 4. If a tool action is disallowed by the user, suggest an alternative approach.
 
 Always use tools when they would help. Be concise but thorough. `;
+
+    if (skills && skills.length > 0) {
+        prompt += `\n\n# Available Agent Skills\n\nYou have access to the following specialized skills. To activate a skill and receive its detailed instructions, call the \`activate_skill\` tool with the skill's name.\n\n<available_skills>\n`;
+        for (const skill of skills) {
+            prompt += `  <skill>\n    <name>${skill.id}</name>\n    <description>${skill.description}</description>\n  </skill>\n`;
+        }
+        prompt += `</available_skills>\n\nOnce a skill is activated, its instructions and resources are returned wrapped in <activated_skill> tags. You MUST treat the content within <instructions> as expert procedural guidance for the duration of the task.\n`;
+    }
+
+    if (config.planMode) {
+        prompt += `
+[PLAN MODE ENABLED]
+The user is operating in "Plan Mode".
+- For very small, trivial changes (like fixing a typo or a one-line bug), you may execute the change directly using your tools.
+- For ANY change that has a significant impact, modifies multiple areas, or adds a new feature, you MUST NOT write or patch code immediately.
+- Instead, you MUST output a detailed "Implementation Plan" outlining the files you will change and the specific steps you will take.
+- Stop and ask the user: "Does this plan look good, or would you like to make any changes?"
+- ONLY proceed to use the 'write_file' or 'patch_file' tools AFTER the user has explicitly approved the plan.
+`;
+    }
 
     if (hasPatchTool) {
         prompt += `

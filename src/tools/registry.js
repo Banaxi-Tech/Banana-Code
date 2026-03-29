@@ -7,6 +7,7 @@ import { listDirectory } from './listDirectory.js';
 import { duckDuckGo } from './duckDuckGo.js';
 import { duckDuckGoScrape } from './duckDuckGoScrape.js';
 import { patchFile } from './patchFile.js';
+import { activateSkill } from './activateSkill.js';
 
 export const TOOLS = [
     {
@@ -133,6 +134,17 @@ export const TOOLS = [
             },
             required: ['filepath', 'edits']
         }
+    },
+    {
+        name: 'activate_skill',
+        description: 'Activates a specialized agent skill by name. Returns the skill\'s instructions wrapped in <activated_skill> tags. These provide specialized guidance for the current task.',
+        parameters: {
+            type: 'object',
+            properties: {
+                skillName: { type: 'string', description: 'The name or ID of the skill to activate.' }
+            },
+            required: ['skillName']
+        }
     }
 ];
 
@@ -156,6 +168,7 @@ export async function executeTool(name, args) {
         case 'duck_duck_go': return await duckDuckGo(args);
         case 'duck_duck_go_scrape': return await duckDuckGoScrape(args);
         case 'patch_file': return await patchFile(args);
+        case 'activate_skill': return await activateSkill(args);
         default: return `Unknown tool: ${name}`;
     }
 }

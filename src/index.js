@@ -1,5 +1,6 @@
 import readline from 'readline';
 import chalk from 'chalk';
+import ora from 'ora';
 import { loadConfig, saveConfig, setupProvider } from './config.js';
 import { runStartup } from './startup.js';
 import { getSessionPermissions } from './permissions.js';
@@ -12,6 +13,7 @@ import { OllamaCloudProvider } from './providers/ollamaCloud.js';
 
 import { loadSession, saveSession, generateSessionId, getLatestSessionId, listSessions } from './sessions.js';
 import { printMarkdown } from './utils/markdown.js';
+import { estimateConversationTokens } from './utils/tokens.js';
 
 let config;
 let providerInstance;
@@ -62,7 +64,7 @@ async function handleSlashCommand(command) {
                 providerInstance = createProvider();
                 console.log(chalk.green(`Switched provider to ${newProv} (${config.model}).`));
             } else {
-                console.log(chalk.yellow(`Usage: /provider <gemini|claude|openai|ollama>`));
+                console.log(chalk.yellow(`Usage: /provider <gemini|claude|openai|ollama_cloud|ollama>`));
             }
             break;
         case '/model':
@@ -130,11 +132,86 @@ async function handleSlashCommand(command) {
             providerInstance = createProvider(); // fresh instance = clear history
             console.log(chalk.green('Chat history cleared.'));
             break;
+        case '/clean':
+            if (!config.betaTools || !config.betaTools.includes('clean_command')) {
+                console.log(chalk.yellow("The /clean command is a beta feature. You need to enable it in the /beta menu first."));
+                break;
+            }
+            const msgCount = providerInstance.messages ? providerInstance.messages.length : 0;
+            if (msgCount <= 2) {
+                console.log(chalk.yellow("Not enough history to summarize."));
+                break;
+            }
+            
+            console.log(chalk.cyan("Summarizing context to save tokens..."));
+            const summarySpinner = ora({ text: 'Compressing history...', color: 'yellow', stream: process.stdout }).start();
+            
+            try {
+                // Temporarily disable terminal formatting for the summary request
+                const originalUseMarked = config.useMarkedTerminal;
+                config.useMarkedTerminal = false;
+                
+                // Create a temporary prompt asking for a summary
+                const summaryPrompt = "SYSTEM INSTRUCTION: Please provide a highly concise summary of our entire conversation so far. Focus ONLY on the overall goal, the current state of the project, any important decisions made, and what we were about to do next. Do not include pleasantries. This summary will be used as your memory going forward.";
+                
+                // Ask the AI to summarize
+                const summary = await providerInstance.sendMessage(summaryPrompt);
+                
+                // Restore settings
+                config.useMarkedTerminal = originalUseMarked;
+                summarySpinner.stop();
+                
+                // Re-initialize the provider to wipe old history
+                providerInstance = createProvider();
+                
+                // Inject the summary as the first message after the system prompt
+                const summaryMemory = `[PREVIOUS CONVERSATION SUMMARY]\n${summary}`;
+                
+                if (config.provider === 'gemini') {
+                    providerInstance.messages.push({ role: 'user', parts: [{ text: summaryMemory }] });
+                    providerInstance.messages.push({ role: 'model', parts: [{ text: "I have stored the summary of our previous conversation in my memory." }] });
+                } else if (config.provider === 'claude') {
+                    providerInstance.messages.push({ role: 'user', content: summaryMemory });
+                    providerInstance.messages.push({ role: 'assistant', content: "I have stored the summary of our previous conversation in my memory." });
+                } else {
+                    providerInstance.messages.push({ role: 'user', content: summaryMemory });
+                    providerInstance.messages.push({ role: 'assistant', content: "I have stored the summary of our previous conversation in my memory." });
+                }
+                
+                console.log(chalk.green(`\nContext successfully compressed!`));
+                if (config.debug) {
+                    console.log(chalk.gray(`\n[Saved Summary]:\n${summary}\n`));
+                }
+                
+                await saveSession(currentSessionId, {
+                    provider: config.provider,
+                    model: config.model || providerInstance.modelName,
+                    messages: providerInstance.messages
+                });
+                
+            } catch (err) {
+                summarySpinner.stop();
+                console.log(chalk.red(`Failed to compress context: ${err.message}`));
+            }
+            break;
         case '/context':
             let length = 0;
-            if (providerInstance.messages) length = providerInstance.messages.length;
-            else if (providerInstance.chat) length = (await providerInstance.chat.getHistory()).length;
-            console.log(chalk.cyan(`Current context contains approximately ${length} messages.`));
+            let messagesForEstimation = [];
+            
+            if (providerInstance.messages) {
+                length = providerInstance.messages.length;
+                messagesForEstimation = providerInstance.messages;
+            } else if (providerInstance.chat) {
+                messagesForEstimation = await providerInstance.chat.getHistory();
+                length = messagesForEstimation.length;
+            }
+            
+            const { estimateConversationTokens } = await import('./utils/tokens.js');
+            const estimatedTokens = estimateConversationTokens(messagesForEstimation);
+            
+            console.log(chalk.cyan(`Current context:`));
+            console.log(chalk.cyan(`- Messages: ${length}`));
+            console.log(chalk.cyan(`- Estimated Tokens: ~${estimatedTokens.toLocaleString()}`));
             break;
         case '/permissions':
             const perms = getSessionPermissions();
@@ -149,18 +226,27 @@ async function handleSlashCommand(command) {
             const { TOOLS } = await import('./tools/registry.js');
             const betaTools = TOOLS.filter(t => t.beta);
 
-            if (betaTools.length === 0) {
-                console.log(chalk.yellow("No beta tools available."));
+            let choices = betaTools.map(t => ({
+                name: t.label || t.name,
+                value: t.name,
+                checked: (config.betaTools || []).includes(t.name)
+            }));
+            
+            // Add beta commands that aren't tools
+            choices.push({
+                name: '/clean command (Context Compression)',
+                value: 'clean_command',
+                checked: (config.betaTools || []).includes('clean_command')
+            });
+
+            if (choices.length === 0) {
+                console.log(chalk.yellow("No beta features available."));
                 break;
             }
 
             const enabledBetaTools = await checkbox({
-                message: 'Select beta tools to activate (Space to toggle, Enter to confirm):',
-                choices: betaTools.map(t => ({
-                    name: t.label || t.name,
-                    value: t.name,
-                    checked: (config.betaTools || []).includes(t.name)
-                }))
+                message: 'Select beta features to activate (Space to toggle, Enter to confirm):',
+                choices: choices
             });
 
             if (enabledBetaTools.includes('duck_duck_go_scrape') && !(config.betaTools || []).includes('duck_duck_go_scrape')) {
@@ -182,7 +268,13 @@ async function handleSlashCommand(command) {
 
             config.betaTools = enabledBetaTools;
             await saveConfig(config);
-            providerInstance = createProvider(); // Re-init to update tools
+            if (providerInstance) {
+                const savedMessages = providerInstance.messages;
+                providerInstance = createProvider(); // Re-init to update tools
+                providerInstance.messages = savedMessages;
+            } else {
+                providerInstance = createProvider();
+            }
             console.log(chalk.green(`Beta tools updated: ${enabledBetaTools.join(', ') || 'none'}`));
             break;
         case '/settings':
@@ -199,21 +291,79 @@ async function handleSlashCommand(command) {
                         name: 'Use syntax highlighting for AI output (requires waiting for full response)',
                         value: 'useMarkedTerminal',
                         checked: config.useMarkedTerminal || false
+                    },
+                    {
+                        name: 'Always show current token count in status bar',
+                        value: 'showTokenCount',
+                        checked: config.showTokenCount || false
                     }
                 ]
             });
             
             config.autoFeedWorkspace = enabledSettings.includes('autoFeedWorkspace');
             config.useMarkedTerminal = enabledSettings.includes('useMarkedTerminal');
+            config.showTokenCount = enabledSettings.includes('showTokenCount');
             await saveConfig(config);
-            providerInstance = createProvider(); // Re-init to update tools/config
+            if (providerInstance) {
+                const savedMessages = providerInstance.messages;
+                providerInstance = createProvider(); // Re-init to update tools/config
+                providerInstance.messages = savedMessages;
+            } else {
+                providerInstance = createProvider();
+            }
             console.log(chalk.green(`Settings updated.`));
             break;
         case '/debug':
             config.debug = !config.debug;
             await saveConfig(config);
-            providerInstance = createProvider(); // Re-init to pass debug flag
+            if (providerInstance) {
+                const savedMessages = providerInstance.messages;
+                providerInstance = createProvider(); // Re-init to pass debug flag
+                providerInstance.messages = savedMessages;
+            } else {
+                providerInstance = createProvider();
+            }
             console.log(chalk.magenta(`Debug mode ${config.debug ? 'enabled' : 'disabled'}.`));
+            break;
+        case '/skills':
+            const { getAvailableSkills } = await import('./utils/skills.js');
+            const skills = getAvailableSkills();
+            if (skills.length === 0) {
+                console.log(chalk.yellow("No skills found."));
+                const os = await import('os');
+                const path = await import('path');
+                const skillsDir = path.join(os.homedir(), '.config', 'banana-code', 'skills');
+                console.log(chalk.gray(`Create skill directories with a SKILL.md file in ${skillsDir}`));
+            } else {
+                console.log(chalk.cyan.bold("\nLoaded Skills:"));
+                skills.forEach(skill => {
+                    console.log(chalk.green(`- ${skill.id}`) + `: ${skill.description}`);
+                });
+            }
+            break;
+        case '/plan':
+            config.planMode = true;
+            await saveConfig(config);
+            if (providerInstance) {
+                const savedMessages = providerInstance.messages;
+                providerInstance = createProvider();
+                providerInstance.messages = savedMessages;
+            } else {
+                providerInstance = createProvider();
+            }
+            console.log(chalk.magenta(`Plan mode enabled. For significant changes, the AI will now propose an implementation plan before writing code.`));
+            break;
+        case '/agent':
+            config.planMode = false;
+            await saveConfig(config);
+            if (providerInstance) {
+                const savedMessages = providerInstance.messages;
+                providerInstance = createProvider();
+                providerInstance.messages = savedMessages;
+            } else {
+                providerInstance = createProvider();
+            }
+            console.log(chalk.green(`Agent mode enabled. The AI will make changes directly.`));
             break;
         case '/chats':
             const sessions = await listSessions();
@@ -231,14 +381,18 @@ async function handleSlashCommand(command) {
         case '/help':
             console.log(chalk.yellow(`
 Available commands:
-  /provider <name> - Switch AI provider (gemini, claude, openai, ollama)
+  /provider <name> - Switch AI provider (gemini, claude, openai, ollama_cloud, ollama)
   /model [name]    - Switch model within current provider (opens menu if name omitted)
   /chats           - List persistent chat sessions
   /clear           - Clear chat history
+  /clean           - Compress chat history into a summary to save tokens
   /context         - Show current context window size
   /permissions     - List session-approved permissions
   /beta            - Manage beta features and tools
   /settings        - Manage app settings (workspace auto-feed, etc)
+  /skills          - List loaded agent skills
+  /plan            - Enable Plan Mode (AI proposes a plan for big changes)
+  /agent           - Enable Agent Mode (default, AI edits directly)
   /debug           - Toggle debug mode (show tool results)
   /help            - Show all commands
   /exit            - Quit Banana Code
@@ -278,7 +432,7 @@ function drawPromptBox(inputText, cursorPos) {
     const placeholder = 'Type your message or @path/to/file';
     const prefix = ' > ';
 
-    const visibleText = (inputText.length === 0) ? (prefix + chalk.gray(placeholder)) : (prefix + inputText);
+    const visibleText = (inputText.length === 0) ? (prefix + chalk.gray(placeholder)) : (prefix + chalk.white(inputText));
     const totalChars = (prefix.length + Math.max(inputText.length, placeholder.length));
     const rows = Math.ceil(totalChars / width) || 1;
 
@@ -298,8 +452,26 @@ function drawPromptBox(inputText, cursorPos) {
     // Redraw status bar and separator (they are always below the prompt)
     const modelDisplay = providerInstance ? providerInstance.modelName : (config.model || 'unknown');
     const providerDisplay = config.provider.toUpperCase();
-    const leftText = ` Provider: ${chalk.cyan(providerDisplay)} / Model: ${chalk.yellow(modelDisplay)}`;
-    const rightText = '? for shortcuts ';
+    const modeDisplay = config.planMode ? chalk.magenta('PLAN MODE') : chalk.green('AGENT MODE');
+    
+    let tokenDisplay = '';
+    if (config.showTokenCount && providerInstance) {
+        let msgs = providerInstance.messages || [];
+        // Support for Ollama chat history format if different
+        if (!providerInstance.messages && typeof providerInstance.chat?.getHistory === 'function') {
+            msgs = providerInstance.chat.getHistory(); // Note: this is async normally, but we use an approximation here or just skip it if it's strictly async. For now, assume providerInstance.messages is the standard.
+        }
+        const tokens = estimateConversationTokens(msgs);
+        let color = chalk.green;
+        if (tokens >= 128000) color = chalk.red;
+        else if (tokens >= 86000) color = chalk.hex('#FFA500'); // Orange
+        else if (tokens >= 64000) color = chalk.yellow;
+        
+        tokenDisplay = ` / Tokens: ${color(tokens.toLocaleString())}`;
+    }
+    
+    const leftText = ` Provider: ${chalk.cyan(providerDisplay)} / Model: ${chalk.yellow(modelDisplay)} / ${modeDisplay}${tokenDisplay}`;
+    const rightText = '/help for shortcuts ';
     const leftStripped = leftText.replace(/\x1b\[[0-9;]*m/g, '');
     const midPad = Math.max(0, width - leftStripped.length - rightText.length);
     const statusLine = chalk.gray(leftText + ' '.repeat(midPad) + rightText);
@@ -325,7 +497,7 @@ function drawPromptBoxInitial(inputText) {
     const placeholder = 'Type your message or @path/to/file';
     const prefix = ' > ';
 
-    const visibleText = (inputText.length === 0) ? (prefix + chalk.gray(placeholder)) : (prefix + inputText);
+    const visibleText = (inputText.length === 0) ? (prefix + chalk.gray(placeholder)) : (prefix + chalk.white(inputText));
     const totalChars = (prefix.length + Math.max(inputText.length, placeholder.length));
     const rows = Math.ceil(totalChars / width) || 1;
 
@@ -338,11 +510,29 @@ function drawPromptBoxInitial(inputText) {
         process.stdout.write(userBg(padLine(lineText, width)) + '\n');
     }
 
-    // Status bar: Current Provider / Model + right-aligned "? for shortcuts"
+    // Status bar: Current Provider / Model + right-aligned "/help for shortcuts"
     const modelDisplay = providerInstance ? providerInstance.modelName : (config.model || 'unknown');
     const providerDisplay = config.provider.toUpperCase();
-    const leftText = ` Provider: ${chalk.cyan(providerDisplay)} / Model: ${chalk.yellow(modelDisplay)}`;
-    const rightText = '? for shortcuts ';
+    const modeDisplay = config.planMode ? chalk.magenta('PLAN MODE') : chalk.green('AGENT MODE');
+    
+    let tokenDisplay = '';
+    if (config.showTokenCount && providerInstance) {
+        let msgs = providerInstance.messages || [];
+        // Support for Ollama chat history format if different
+        if (!providerInstance.messages && typeof providerInstance.chat?.getHistory === 'function') {
+            msgs = providerInstance.chat.getHistory(); // Note: this is async normally, but we use an approximation here or just skip it if it's strictly async. For now, assume providerInstance.messages is the standard.
+        }
+        const tokens = estimateConversationTokens(msgs);
+        let color = chalk.green;
+        if (tokens >= 128000) color = chalk.red;
+        else if (tokens >= 86000) color = chalk.hex('#FFA500'); // Orange
+        else if (tokens >= 64000) color = chalk.yellow;
+        
+        tokenDisplay = ` / Tokens: ${color(tokens.toLocaleString())}`;
+    }
+    
+    const leftText = ` Provider: ${chalk.cyan(providerDisplay)} / Model: ${chalk.yellow(modelDisplay)} / ${modeDisplay}${tokenDisplay}`;
+    const rightText = '/help for shortcuts ';
 
     const leftStripped = leftText.replace(/\x1b\[[0-9;]*m/g, '');
     const midPad = Math.max(0, width - leftStripped.length - rightText.length);

@@ -2,6 +2,18 @@
     "name": "@banaxi/banana-code",
     "version": "1.1.0",
     "description": "🍌 BananaCode",
+    "keywords": [
+        "banana",
+        "ai",
+        "cli",
+        "agent",
+        "coding-assistant",
+        "terminal",
+        "gemini",
+        "claude",
+        "openai",
+        "ollama"
+    ],
     "type": "module",
     "license": "GPL-3.0-or-later",
     "bin": {
