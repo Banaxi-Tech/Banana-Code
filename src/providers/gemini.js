@@ -80,11 +80,16 @@ export class GeminiProvider {
                             if (content && content.parts) {
                                 for (const part of content.parts) {
                                     if (part.text) {
-                                        if (spinner && spinner.isSpinning && !this.config.useMarkedTerminal) spinner.stop();
+                                        if (spinner.isSpinning && !this.config.useMarkedTerminal) spinner.stop();
                                         if (!this.config.useMarkedTerminal) {
-                                            process.stdout.write(chalk.cyan(part.text));
+                                            if (this.config.isApiMode && this.onChunk) {
+                                                this.onChunk(part.text);
+                                            } else {
+                                                process.stdout.write(chalk.cyan(part.text));
+                                            }
                                         }
                                         responseText += part.text;
+
                                         currentTurnText += part.text;
 
                                         // Aggregate sequential text parts
@@ -134,8 +139,14 @@ export class GeminiProvider {
                     if (part.functionCall) {
                         hasToolCalls = true;
                         const call = part.functionCall;
+                        if (this.config.isApiMode && this.onToolStart) {
+                            this.onToolStart(call.name);
+                        }
                         console.log(chalk.yellow(`\n[Banana Calling Tool: ${call.name}]`));
                         const res = await executeTool(call.name, call.args, this.config);
+                        if (this.config.isApiMode && this.onToolEnd) {
+                            this.onToolEnd(res);
+                        }
                         if (this.config.debug) {
                             console.log(chalk.gray(`[DEBUG] Tool Result: ${typeof res === 'string' ? res : JSON.stringify(res, null, 2)}`));
                         }

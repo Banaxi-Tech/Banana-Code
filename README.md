@@ -62,11 +62,13 @@ While tools like Cursor provide great GUI experiences, Banana Code is built for 
 
 ## 🚀 Installation
 
-Install Banana Code globally via npm:
+Install Banana Code globally via npm using the scoped package name:
 
 ```bash
 npm install -g @banaxi/banana-code
 ```
+
+> **⚠️ Important Notice:** Please ensure you install `@banaxi/banana-code`. The unscoped `banana-code` package on npm is NOT affiliated with this project.
 
 ## 🛠️ Setup
 
@@ -97,6 +99,8 @@ While in a chat, use these special commands:
 - `/model`: Switch the active AI model on the fly.
 - `/chats`: Open an interactive menu to view and resume past auto-titled chat sessions.
 - `/clean`: Compress your current chat history into a dense summary to save tokens.
+- `/memory`: Manage your global AI memories (facts the AI remembers across all projects).
+- `/init`: Analyze the current project and generate a `BANANA.md` summary for instant context.
 - `/context`: View your current message count and estimated token usage.
 - `/settings`: Toggle UI features like syntax highlighting and auto-workspace feeding.
 - `/plan` & `/agent`: Toggle between Plan & Execute mode and standard Agent mode.
@@ -154,6 +158,69 @@ Banana Code supports the open standard [Model Context Protocol](https://modelcon
 ```
 
 Restart Banana Code, and the AI will instantly know how to use these new tools natively!
+
+### 🧠 Global AI Memory
+Banana Code features a persistent "brain" that remembers your preferences across every project you work on.
+
+1. Enable **Enable Global AI Memory** in the `/settings` menu.
+2. Tell the AI facts about yourself or your coding style (e.g., "My name is Max" or "I prefer using Python for data scripts").
+3. Use the `/memory` command to view, manually add, or delete saved facts.
+4. The AI will now automatically adhere to these preferences in every future session!
+
+### 🍌 Project Initialization (`/init`)
+Stop repeating yourself! When you start working in a new folder, type `/init`. 
+
+Banana Code will analyze your entire project structure and generate a **`BANANA.md`** file. This file acts as a high-level architectural summary. Every time you start `banana` in that folder, the AI silently reads this file, giving it instant context about your project's goals and technologies from the very first message.
+
+## 📡 Headless API Mode (`--api`)
+Banana Code can be run as a background engine, exposing its powerful tool-calling and provider-switching logic via a local HTTP and WebSocket server. This allows you to build custom GUIs (Electron, Tauri, React) on top of the Banana Code engine without rewriting any AI logic.
+
+Start the server:
+```bash
+banana --api 4000
+```
+
+### HTTP Endpoints
+- `GET /api/status`: Returns engine status, active provider, and model.
+- `GET /api/sessions`: Returns a JSON array of all saved chat sessions.
+- `GET /api/config`: Returns the current `config.json` preferences.
+
+### WebSocket Streaming & Chat
+Connect a WebSocket client (like `wscat` or your GUI frontend) to `ws://localhost:4000`.
+
+**Send a chat message:**
+```json
+{ "type": "chat", "text": "Run the sensors command" }
+```
+
+**Streamed Response Format:**
+Banana Code streams data back to the client in real-time chunks:
+- `{"type": "chunk", "content": "The output of the command is..."}`
+- `{"type": "tool_start", "tool": "execute_command"}`
+- `{"type": "done", "finalResponse": "..."}`
+
+### Remote Tool Approval (Security)
+If the AI decides to run a shell command or patch a file, Banana Code pauses execution and sends a permission ticket to your GUI:
+
+```json
+{
+  "type": "permission_requested",
+  "ticketId": "5c9b2a...",
+  "action": "Execute Command",
+  "details": "sensors"
+}
+```
+
+Your GUI must present a dialog to the user and respond with the same `ticketId` to resume execution:
+```json
+{
+  "type": "permission_response",
+  "ticketId": "5c9b2a...",
+  "allowed": true,
+  "session": true
+}
+```
+If an invalid `ticketId` is provided, Banana Code automatically blocks the tool execution to ensure safety.
 
 ## 🔐 Privacy & Security
 

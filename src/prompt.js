@@ -1,4 +1,6 @@
 import os from 'os';
+import fs from 'fs';
+import path from 'path';
 import { getAvailableTools } from './tools/registry.js';
 import { getAvailableSkills } from './utils/skills.js';
 
@@ -28,6 +30,34 @@ SAFETY RULES:
 4. If a tool action is disallowed by the user, suggest an alternative approach.
 
 Always use tools when they would help. Be concise but thorough. `;
+
+    // Load Project Context (BANANA.md)
+    try {
+        const bananaPath = path.join(process.cwd(), 'BANANA.md');
+        if (fs.existsSync(bananaPath)) {
+            const projectContext = fs.readFileSync(bananaPath, 'utf8');
+            prompt += `\n\n# Project Context (BANANA.md)\nThe following is the summary of the current project. You already know this; DO NOT use tools to read BANANA.md manually:\n${projectContext}\n`;
+        }
+    } catch (e) {}
+
+    // Load Global Memory
+    if (config.useMemory) {
+        prompt += `\n\n# Global AI Memory\nYou have the ability to remember facts across ALL sessions and projects using the \`save_memory\` tool. If the user tells you their name, personal preferences, coding rules, or other information they might want to persist, feel free to use the \`save_memory\` tool so you can remember it in the future.\n`;
+        
+        try {
+            const memPath = path.join(os.homedir(), '.config', 'banana-code', 'memory.json');
+            if (fs.existsSync(memPath)) {
+                const memData = fs.readFileSync(memPath, 'utf8');
+                const memories = JSON.parse(memData);
+                if (memories.length > 0) {
+                    prompt += `You have persistently saved the following facts and preferences across ALL projects. Always adhere to these preferences:\n`;
+                    for (const m of memories) {
+                        prompt += `- ${m.fact}\n`;
+                    }
+                }
+            }
+        } catch (e) {}
+    }
 
     if (skills && skills.length > 0) {
         prompt += `\n\n# Available Agent Skills\n\nYou have access to the following specialized skills. To activate a skill and receive its detailed instructions, call the \`activate_skill\` tool with the skill's name.\n\n<available_skills>\n`;

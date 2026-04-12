@@ -1,5 +1,6 @@
 import { select } from '@inquirer/prompts';
 import chalk from 'chalk';
+import crypto from 'crypto';
 
 const sessionPermissions = new Set();
 
@@ -16,6 +17,15 @@ export async function requestPermission(actionType, details) {
 
     if (sessionPermissions.has(permKey)) {
         return { allowed: true };
+    }
+
+    if (typeof global.apiPermissionHandler === 'function') {
+        const ticketId = crypto.randomUUID();
+        const result = await global.apiPermissionHandler(ticketId, actionType, details);
+        if (result.remember) {
+            sessionPermissions.add(permKey);
+        }
+        return { allowed: result.allowed };
     }
 
     const boxWidth = 41; // Internal width

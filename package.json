@@ -1,6 +1,6 @@
 {
     "name": "@banaxi/banana-code",
-    "version": "1.5.1",
+    "version": "1.6.0",
     "description": "🍌 BananaCode",
     "keywords": [
         "banana",
@@ -32,12 +32,15 @@
         "@modelcontextprotocol/sdk": "^1.28.0",
         "@openai/codex": "^0.117.0",
         "chalk": "^5.4.1",
+        "cors": "^2.8.6",
         "diff": "^8.0.4",
+        "express": "^5.2.1",
         "glob": "13.0.6",
         "marked": "^15.0.12",
         "marked-terminal": "^7.3.0",
         "open": "^11.0.0",
         "openai": "^4.79.1",
-        "ora": "^8.1.1"
+        "ora": "^8.1.1",
+        "ws": "^8.20.0"
     }
 }

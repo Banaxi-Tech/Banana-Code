@@ -10,6 +10,7 @@ import { patchFile } from './patchFile.js';
 import { activateSkill } from './activateSkill.js';
 import { delegateTask } from './delegateTask.js';
 import { mcpManager } from '../utils/mcp.js';
+import { saveMemoryTool, listMemoryTool, deleteMemoryTool } from './memoryTools.js';
 
 export const TOOLS = [
     {
@@ -109,9 +110,9 @@ export const TOOLS = [
     },
     {
         name: 'patch_file',
-        label: 'Surgical File Patch (Beta)',
+        label: 'Surgical File Patch',
         description: 'Edit a file by replacing specific sections of text. Much more efficient for large files.',
-        beta: true,
+        settingsFeature: 'usePatchFile',
         parameters: {
             type: 'object',
             properties: {
@@ -170,6 +171,40 @@ export const TOOLS = [
             },
             required: ['task']
         }
+    },
+    {
+        name: 'save_memory',
+        description: 'Persists a fact across ALL future sessions globally. Use this ONLY to save facts or preferences you want to permanently remember across different projects. Do NOT use for session-specific or temporary data.',
+        memoryFeature: true,
+        parameters: {
+            type: 'object',
+            properties: {
+                fact: { type: 'string', description: 'A concise fact or preference to remember globally.' }
+            },
+            required: ['fact']
+        }
+    },
+    {
+        name: 'list_memory',
+        description: 'Retrieves all globally saved memories with their IDs. Use this to review facts you have saved or find an ID to delete an outdated fact.',
+        memoryFeature: true,
+        parameters: {
+            type: 'object',
+            properties: {},
+            required: []
+        }
+    },
+    {
+        name: 'delete_memory',
+        description: 'Deletes a specific global memory using its ID. Call list_memory first to find the ID.',
+        memoryFeature: true,
+        parameters: {
+            type: 'object',
+            properties: {
+                id: { type: 'string', description: 'The exact ID of the memory to delete.' }
+            },
+            required: ['id']
+        }
     }
 ];
 
@@ -177,6 +212,13 @@ export function getAvailableTools(config = {}) {
     let available = TOOLS.filter(tool => {
         if (tool.beta) {
             return config.betaTools && config.betaTools.includes(tool.name);
+        }
+        if (tool.memoryFeature) {
+            return config.useMemory === true;
+        }
+        if (tool.settingsFeature) {
+            // Default to true if not explicitly set to false
+            return config[tool.settingsFeature] !== false;
         }
         return true;
     });
@@ -241,6 +283,9 @@ export async function executeTool(name, args, config) {
         case 'patch_file': return await patchFile(args);
         case 'activate_skill': return await activateSkill(args);
         case 'delegate_task': return await delegateTask(args, config);
+        case 'save_memory': return await saveMemoryTool(args);
+        case 'list_memory': return await listMemoryTool(args);
+        case 'delete_memory': return await deleteMemoryTool(args);
         default: return `Unknown tool: ${name}`;
     }
 }

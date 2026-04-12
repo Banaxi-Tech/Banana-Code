@@ -109,6 +109,9 @@ export class MistralProvider {
                 });
 
                 for (const call of toolCalls) {
+                    if (this.config.isApiMode && this.onToolStart) {
+                        this.onToolStart(call.function.name);
+                    }
                     console.log(chalk.yellow(`\n[Banana Calling Tool: ${call.function.name}]`));
                     let args = {};
                     try {
@@ -116,6 +119,9 @@ export class MistralProvider {
                     } catch (e) { }
 
                     const res = await executeTool(call.function.name, args, this.config);
+                    if (this.config.isApiMode && this.onToolEnd) {
+                        this.onToolEnd(res);
+                    }
                     if (this.config.debug) {
                         console.log(chalk.gray(`[DEBUG] Tool Result: ${typeof res === 'string' ? res : JSON.stringify(res, null, 2)}`));
                     }

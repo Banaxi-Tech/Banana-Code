@@ -84,7 +84,11 @@ export class OllamaCloudProvider {
                                     const content = data.message.content;
                                     if (spinner.isSpinning && !this.config.useMarkedTerminal) spinner.stop();
                                     if (!this.config.useMarkedTerminal) {
-                                        process.stdout.write(chalk.cyan(content));
+                                        if (this.config.isApiMode && this.onChunk) {
+                                            this.onChunk(content);
+                                        } else {
+                                            process.stdout.write(chalk.cyan(content));
+                                        }
                                     }
                                     currentChunkResponse += content;
                                     finalResponse += content;
@@ -130,9 +134,15 @@ export class OllamaCloudProvider {
 
                 for (const call of lastMessageObj.tool_calls) {
                     const fn = call.function;
+                    if (this.config.isApiMode && this.onToolStart) {
+                        this.onToolStart(fn.name);
+                    }
                     console.log(chalk.yellow(`\n[Banana Calling Tool: ${fn.name}]`));
 
                     let res = await executeTool(fn.name, fn.arguments, this.config);
+                    if (this.config.isApiMode && this.onToolEnd) {
+                        this.onToolEnd(res);
+                    }
                     if (this.config.debug) {
                         console.log(chalk.gray(`[DEBUG] Tool Result: ${typeof res === 'string' ? res : JSON.stringify(res, null, 2)}`));
                     }

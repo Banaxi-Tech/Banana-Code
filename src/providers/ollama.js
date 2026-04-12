@@ -75,9 +75,15 @@ export class OllamaProvider {
 
                 for (const call of messageObj.tool_calls) {
                     const fn = call.function;
+                    if (this.config.isApiMode && this.onToolStart) {
+                        this.onToolStart(fn.name);
+                    }
                     console.log(chalk.yellow(`\n[Banana Calling Tool: ${fn.name}]`));
 
                     let res = await executeTool(fn.name, fn.arguments, this.config);
+                    if (this.config.isApiMode && this.onToolEnd) {
+                        this.onToolEnd(res);
+                    }
                     if (this.config.debug) {
                         console.log(chalk.gray(`[DEBUG] Tool Result: ${typeof res === 'string' ? res : JSON.stringify(res, null, 2)}`));
                     }

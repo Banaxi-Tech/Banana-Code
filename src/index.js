@@ -16,6 +16,7 @@ import { loadSession, saveSession, generateSessionId, getLatestSessionId, listSe
 import { printMarkdown } from './utils/markdown.js';
 import { estimateConversationTokens } from './utils/tokens.js';
 import { mcpManager } from './utils/mcp.js';
+import { startApiServer } from './server.js';
 
 let config;
 let providerInstance;
@@ -312,16 +313,28 @@ async function handleSlashCommand(command) {
                         checked: config.useMarkedTerminal || false
                     },
                     {
+                        name: 'Enable Surgical File Patching (patch_file tool)',
+                        value: 'usePatchFile',
+                        checked: config.usePatchFile !== false
+                    },
+                    {
                         name: 'Always show current token count in status bar',
                         value: 'showTokenCount',
                         checked: config.showTokenCount || false
+                    },
+                    {
+                        name: 'Enable Global AI Memory (Allows AI to save facts persistently)',
+                        value: 'useMemory',
+                        checked: config.useMemory || false
                     }
                 ]
             });
             
             config.autoFeedWorkspace = enabledSettings.includes('autoFeedWorkspace');
             config.useMarkedTerminal = enabledSettings.includes('useMarkedTerminal');
+            config.usePatchFile = enabledSettings.includes('usePatchFile');
             config.showTokenCount = enabledSettings.includes('showTokenCount');
+            config.useMemory = enabledSettings.includes('useMemory');
             await saveConfig(config);
             if (providerInstance) {
                 const savedMessages = providerInstance.messages;
@@ -424,6 +437,91 @@ async function handleSlashCommand(command) {
                 }
             }
             break;
+        case '/memory':
+            if (!config.useMemory) {
+                console.log(chalk.yellow("Global AI Memory is disabled. Enable it in /settings first."));
+                break;
+            }
+            const { select: memSelect, input: memInput } = await import('@inquirer/prompts');
+            const { loadMemory, removeMemory, addMemory } = await import('./utils/memory.js');
+            let memAction = await memSelect({
+                message: 'Manage Global AI Memory:',
+                choices: [
+                    { name: 'View all memories', value: 'view' },
+                    { name: 'Add a new memory manually', value: 'add' },
+                    { name: 'Delete a memory', value: 'delete' }
+                ],
+                loop: false
+            });
+
+            if (memAction === 'view') {
+                const mems = await loadMemory();
+                if (mems.length === 0) {
+                    console.log(chalk.yellow("No global memories saved yet."));
+                } else {
+                    console.log(chalk.cyan.bold("\nGlobal Memories:"));
+                    mems.forEach(m => {
+                        console.log(chalk.gray(`[${m.id}] `) + chalk.green(m.fact));
+                    });
+                }
+            } else if (memAction === 'add') {
+                const newFact = await memInput({
+                    message: 'Enter the fact you want the AI to remember globally:',
+                    validate: (v) => v.trim().length > 0 || 'Memory cannot be empty'
+                });
+                const id = await addMemory(newFact);
+                console.log(chalk.green(`Memory saved with ID: ${id}`));
+                providerInstance = createProvider(); // Reload provider to inject new memory
+            } else if (memAction === 'delete') {
+                const mems = await loadMemory();
+                if (mems.length === 0) {
+                    console.log(chalk.yellow("No memories to delete."));
+                } else {
+                    const idToDelete = await memSelect({
+                        message: 'Select a memory to delete:',
+                        choices: mems.map(m => ({ name: m.fact, value: m.id })),
+                        loop: false,
+                        pageSize: 10
+                    });
+                    const success = await removeMemory(idToDelete);
+                    if (success) {
+                        console.log(chalk.green(`Memory deleted.`));
+                        providerInstance = createProvider(); // Reload provider
+                    }
+                }
+            }
+            break;
+        case '/init':
+            console.log(chalk.cyan("Generating project summary for BANANA.md..."));
+            const initSpinner = ora({ text: 'Analyzing project...', color: 'yellow', stream: process.stdout }).start();
+            try {
+                const { getWorkspaceTree } = await import('./utils/workspace.js');
+                const tree = await getWorkspaceTree();
+                
+                const initProvider = createProvider();
+                // We use a completely blank slate for this so it doesn't get confused
+                initProvider.messages = []; 
+                
+                let initPrompt = "SYSTEM: You are a project summarizer. Review the following project file tree and briefly describe what this project is, what technologies it uses, and any obvious conventions. Keep it under 2 paragraphs. Output ONLY the summary text.";
+                initPrompt += `\n\n--- Project Tree ---\n${tree}`;
+                
+                const summary = await initProvider.sendMessage(initPrompt);
+                
+                const fs = await import('fs/promises');
+                const path = await import('path');
+                const bananaPath = path.join(process.cwd(), 'BANANA.md');
+                await fs.writeFile(bananaPath, summary, 'utf8');
+                
+                initSpinner.stop();
+                console.log(chalk.green(`Successfully created BANANA.md!`));
+                
+                // Re-init current provider so it picks up the new BANANA.md
+                providerInstance = createProvider();
+            } catch (err) {
+                initSpinner.stop();
+                console.log(chalk.red(`Failed to initialize project: ${err.message}`));
+            }
+            break;
         case '/help':
             console.log(chalk.yellow(`
 Available commands:
@@ -437,6 +535,8 @@ Available commands:
   /beta            - Manage beta features and tools
   /settings        - Manage app settings (workspace auto-feed, etc)
   /skills          - List loaded agent skills
+  /memory          - Manage global AI memories
+  /init            - Generate a BANANA.md project summary file
   /plan            - Enable Plan Mode (AI proposes a plan for big changes)
   /agent           - Enable Agent Mode (default, AI edits directly)
   /debug           - Toggle debug mode (show tool results)
@@ -827,6 +927,14 @@ async function main() {
 
         if (config.betaTools && config.betaTools.includes('mcp_support')) {
             await mcpManager.init();
+        }
+
+        const apiIdx = process.argv.indexOf('--api');
+        if (apiIdx !== -1) {
+            const portStr = process.argv[apiIdx + 1];
+            const port = portStr && !portStr.startsWith('-') ? parseInt(portStr) : 3000;
+            await startApiServer(port, createProvider);
+            return;
         }
 
         const resumeIdx = process.argv.indexOf('--resume');
