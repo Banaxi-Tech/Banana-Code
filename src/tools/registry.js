@@ -1,5 +1,6 @@
 import { execCommand } from './execCommand.js';
 import { readFile } from './readFile.js';
+import { readManyFiles } from './readManyFiles.js';
 import { writeFile } from './writeFile.js';
 import { fetchUrl } from './fetchUrl.js';
 import { searchFiles } from './searchFiles.js';
@@ -34,6 +35,21 @@ export const TOOLS = [
                 filepath: { type: 'string', description: 'Path to the file to read' }
             },
             required: ['filepath']
+        }
+    },
+    {
+        name: 'read_many_files',
+        description: 'Read the contents of multiple files at once.',
+        parameters: {
+            type: 'object',
+            properties: {
+                filepaths: {
+                    type: 'array',
+                    description: 'List of file paths to read',
+                    items: { type: 'string' }
+                }
+            },
+            required: ['filepaths']
         }
     },
     {
@@ -210,11 +226,15 @@ export const TOOLS = [
 
 export function getAvailableTools(config = {}) {
     let available = TOOLS.filter(tool => {
+        if (config.askMode) {
+            const forbiddenInAskMode = ['write_file', 'patch_file'];
+            if (forbiddenInAskMode.includes(tool.name)) return false;
+        }
         if (tool.beta) {
             return config.betaTools && config.betaTools.includes(tool.name);
         }
         if (tool.memoryFeature) {
-            return config.useMemory === true;
+            return config.useMemory !== false;
         }
         if (tool.settingsFeature) {
             // Default to true if not explicitly set to false
@@ -274,6 +294,7 @@ export async function executeTool(name, args, config) {
     switch (name) {
         case 'execute_command': return await execCommand(args);
         case 'read_file': return await readFile(args);
+        case 'read_many_files': return await readManyFiles(args);
         case 'write_file': return await writeFile(args);
         case 'fetch_url': return await fetchUrl(args);
         case 'search_files': return await searchFiles(args);

@@ -24,10 +24,11 @@ export const OLLAMA_CLOUD_MODELS = [
     { name: 'Kimi K2.5 (Cloud)', value: 'kimi-k2.5:cloud' },
     { name: 'Qwen 3.5 397B (Cloud)', value: 'qwen3.5:397b-cloud' },
     { name: 'DeepSeek V3.2 (Cloud)', value: 'deepseek-v3.2:cloud' },
-    { name: 'GLM-5 (Cloud)', value: 'glm-5:cloud' },
+    { name: 'GLM-5.1 (Cloud)', value: 'glm-5.1:cloud' },
     { name: 'MiniMax M2.7 (Cloud)', value: 'minimax-m2.7:cloud' },
     { name: 'Llama 3.3 70B (Cloud)', value: 'llama3.3:cloud' },
-    { name: 'Llama 3.1 405B (Cloud)', value: 'llama3.1:405b-cloud' }
+    { name: 'Llama 3.1 405B (Cloud)', value: 'llama3.1:405b-cloud' },
+    { name: 'Gemma 4 31B (Cheapest, Very Good Code)', value: 'gemma4:31b-cloud' }
 ];
 
 export const MISTRAL_MODELS = [

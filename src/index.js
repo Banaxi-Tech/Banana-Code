@@ -3,7 +3,7 @@ import chalk from 'chalk';
 import ora from 'ora';
 import { loadConfig, saveConfig, setupProvider } from './config.js';
 import { runStartup } from './startup.js';
-import { getSessionPermissions } from './permissions.js';
+import { getSessionPermissions, setYoloMode } from './permissions.js';
 
 import { GeminiProvider } from './providers/gemini.js';
 import { ClaudeProvider } from './providers/claude.js';
@@ -325,7 +325,7 @@ async function handleSlashCommand(command) {
                     {
                         name: 'Enable Global AI Memory (Allows AI to save facts persistently)',
                         value: 'useMemory',
-                        checked: config.useMemory || false
+                        checked: config.useMemory !== false
                     }
                 ]
             });
@@ -375,6 +375,8 @@ async function handleSlashCommand(command) {
             break;
         case '/plan':
             config.planMode = true;
+            config.askMode = false;
+            config.securityMode = false;
             await saveConfig(config);
             if (providerInstance) {
                 const savedMessages = providerInstance.messages;
@@ -385,8 +387,52 @@ async function handleSlashCommand(command) {
             }
             console.log(chalk.magenta(`Plan mode enabled. For significant changes, the AI will now propose an implementation plan before writing code.`));
             break;
+        case '/ask':
+            config.askMode = true;
+            config.planMode = false;
+            config.securityMode = false;
+            await saveConfig(config);
+            if (providerInstance) {
+                const savedMessages = providerInstance.messages;
+                providerInstance = createProvider();
+                providerInstance.messages = savedMessages;
+            } else {
+                providerInstance = createProvider();
+            }
+            console.log(chalk.blue(`Ask mode enabled. The AI will only answer questions and cannot edit files.`));
+            break;
+        case '/security':
+            config.securityMode = true;
+            config.askMode = false;
+            config.planMode = false;
+            await saveConfig(config);
+            if (providerInstance) {
+                const savedMessages = providerInstance.messages;
+                providerInstance = createProvider();
+                providerInstance.messages = savedMessages;
+            } else {
+                providerInstance = createProvider();
+            }
+            console.log(chalk.red(`Security mode enabled. The AI will look for and help fix vulnerabilities.`));
+            console.log(chalk.yellow(`Disclaimer: Please only use this mode for defensive purposes to secure your own code, and do not use the identified vulnerabilities maliciously.`));
+            break;
+        case '/yolo':
+            config.yolo = !config.yolo;
+            setYoloMode(config.yolo);
+            await saveConfig(config);
+            if (providerInstance) {
+                const savedMessages = providerInstance.messages;
+                providerInstance = createProvider();
+                providerInstance.messages = savedMessages;
+            } else {
+                providerInstance = createProvider();
+            }
+            console.log(config.yolo ? chalk.bgRed.white.bold('\n ⚠️ YOLO MODE ENABLED - All permission requests will be auto-accepted! \n') : chalk.green('\nYOLO mode disabled.\n'));
+            break;
         case '/agent':
             config.planMode = false;
+            config.askMode = false;
+            config.securityMode = false;
             await saveConfig(config);
             if (providerInstance) {
                 const savedMessages = providerInstance.messages;
@@ -438,7 +484,7 @@ async function handleSlashCommand(command) {
             }
             break;
         case '/memory':
-            if (!config.useMemory) {
+            if (config.useMemory === false) {
                 console.log(chalk.yellow("Global AI Memory is disabled. Enable it in /settings first."));
                 break;
             }
@@ -539,6 +585,7 @@ Available commands:
   /init            - Generate a BANANA.md project summary file
   /plan            - Enable Plan Mode (AI proposes a plan for big changes)
   /agent           - Enable Agent Mode (default, AI edits directly)
+  /yolo            - Toggle YOLO mode (skip all permission requests)
   /debug           - Toggle debug mode (show tool results)
   /help            - Show all commands
   /exit            - Quit Banana Code
@@ -667,7 +714,10 @@ function drawPromptBox(inputText, cursorPos) {
     // Redraw status bar and separator (they are always below the prompt)
     const modelDisplay = providerInstance ? providerInstance.modelName : (config.model || 'unknown');
     const providerDisplay = config.provider.toUpperCase();
-    const modeDisplay = config.planMode ? chalk.magenta('PLAN MODE') : chalk.green('AGENT MODE');
+    let modeDisplay = chalk.green('AGENT MODE');
+    if (config.askMode) modeDisplay = chalk.blue('ASK MODE');
+    else if (config.securityMode) modeDisplay = chalk.red('SECURITY MODE');
+    else if (config.planMode) modeDisplay = chalk.magenta('PLAN MODE');
     
     let tokenDisplay = '';
     if (config.showTokenCount && providerInstance) {
@@ -685,7 +735,8 @@ function drawPromptBox(inputText, cursorPos) {
         tokenDisplay = ` / Tokens: ${color(tokens.toLocaleString())}`;
     }
     
-    const leftText = ` Provider: ${chalk.cyan(providerDisplay)} / Model: ${chalk.yellow(modelDisplay)} / ${modeDisplay}${tokenDisplay}`;
+    const yoloDisplay = config.yolo ? chalk.bgRed.white.bold(' ⚠️ YOLO ') : '';
+    const leftText = ` Provider: ${chalk.cyan(providerDisplay)} / Model: ${chalk.yellow(modelDisplay)} / ${modeDisplay}${tokenDisplay}${yoloDisplay ? ' / ' + yoloDisplay : ''}`;
     const rightText = '/help for shortcuts ';
     const leftStripped = leftText.replace(/\x1b\[[0-9;]*m/g, '');
     const midPad = Math.max(0, width - leftStripped.length - rightText.length);
@@ -728,7 +779,10 @@ function drawPromptBoxInitial(inputText) {
     // Status bar: Current Provider / Model + right-aligned "/help for shortcuts"
     const modelDisplay = providerInstance ? providerInstance.modelName : (config.model || 'unknown');
     const providerDisplay = config.provider.toUpperCase();
-    const modeDisplay = config.planMode ? chalk.magenta('PLAN MODE') : chalk.green('AGENT MODE');
+    let modeDisplay = chalk.green('AGENT MODE');
+    if (config.askMode) modeDisplay = chalk.blue('ASK MODE');
+    else if (config.securityMode) modeDisplay = chalk.red('SECURITY MODE');
+    else if (config.planMode) modeDisplay = chalk.magenta('PLAN MODE');
     
     let tokenDisplay = '';
     if (config.showTokenCount && providerInstance) {
@@ -746,7 +800,8 @@ function drawPromptBoxInitial(inputText) {
         tokenDisplay = ` / Tokens: ${color(tokens.toLocaleString())}`;
     }
     
-    const leftText = ` Provider: ${chalk.cyan(providerDisplay)} / Model: ${chalk.yellow(modelDisplay)} / ${modeDisplay}${tokenDisplay}`;
+    const yoloDisplay = config.yolo ? chalk.bgRed.white.bold(' ⚠️ YOLO ') : '';
+    const leftText = ` Provider: ${chalk.cyan(providerDisplay)} / Model: ${chalk.yellow(modelDisplay)} / ${modeDisplay}${tokenDisplay}${yoloDisplay ? ' / ' + yoloDisplay : ''}`;
     const rightText = '/help for shortcuts ';
 
     const leftStripped = leftText.replace(/\x1b\[[0-9;]*m/g, '');
@@ -923,6 +978,12 @@ function promptUser() {
 async function main() {
     try {
         config = await loadConfig();
+
+        if (process.argv.includes('--yolo')) {
+            config.yolo = true;
+        }
+        setYoloMode(config.yolo);
+
         await runStartup();
 
         if (config.betaTools && config.betaTools.includes('mcp_support')) {
@@ -933,7 +994,16 @@ async function main() {
         if (apiIdx !== -1) {
             const portStr = process.argv[apiIdx + 1];
             const port = portStr && !portStr.startsWith('-') ? parseInt(portStr) : 3000;
-            await startApiServer(port, createProvider);
+
+            let host = '127.0.0.1';
+            const hostIdx = process.argv.indexOf('--host');
+            if (hostIdx !== -1 && process.argv[hostIdx + 1] && !process.argv[hostIdx + 1].startsWith('-')) {
+                host = process.argv[hostIdx + 1];
+            } else if (process.argv.includes('--expose')) {
+                host = '0.0.0.0';
+            }
+
+            await startApiServer(port, createProvider, host);
             return;
         }
 

@@ -4,6 +4,10 @@ import crypto from 'crypto';
 
 const sessionPermissions = new Set();
 
+export function setYoloMode(enabled) {
+    global.bananaYoloMode = !!enabled;
+}
+
 function wrapText(text, width) {
     const lines = [];
     for (let i = 0; i < text.length; i += width) {
@@ -13,6 +17,10 @@ function wrapText(text, width) {
 }
 
 export async function requestPermission(actionType, details) {
+    if (global.bananaYoloMode || process.argv.includes('--yolo')) {
+        return { allowed: true };
+    }
+
     const permKey = `allow_session_${actionType}`;
 
     if (sessionPermissions.has(permKey)) {

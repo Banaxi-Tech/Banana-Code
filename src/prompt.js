@@ -41,7 +41,7 @@ Always use tools when they would help. Be concise but thorough. `;
     } catch (e) {}
 
     // Load Global Memory
-    if (config.useMemory) {
+    if (config.useMemory !== false) {
         prompt += `\n\n# Global AI Memory\nYou have the ability to remember facts across ALL sessions and projects using the \`save_memory\` tool. If the user tells you their name, personal preferences, coding rules, or other information they might want to persist, feel free to use the \`save_memory\` tool so you can remember it in the future.\n`;
         
         try {
@@ -89,6 +89,26 @@ The user is operating in "Plan Mode".
 - Instead, you MUST output a detailed "Implementation Plan" outlining the files you will change and the specific steps you will take.
 - Stop and ask the user: "Does this plan look good, or would you like to make any changes?"
 - ONLY proceed to use the 'write_file' or 'patch_file' tools AFTER the user has explicitly approved the plan.
+`;
+    }
+
+    if (config.askMode) {
+        prompt += `
+[ASK MODE ENABLED]
+The user is operating in "Ask Mode".
+- You are strictly restricted to answering questions, explaining code, and providing information.
+- You MUST NOT make any changes to the codebase. Do NOT use tools that modify files or execute shell commands that change state (e.g. creating/deleting files, installing packages).
+- Use read-only tools like search_files, list_directory, read_file, and read-only execute_command (like running a test or git status) to gather information to answer the user's questions.
+`;
+    }
+
+    if (config.securityMode) {
+        prompt += `
+[SECURITY MODE ENABLED]
+The user is operating in "Security Mode".
+- Your primary objective is to find security vulnerabilities, misconfigurations, and bad practices in the codebase.
+- Act as a red-team auditor. Search for OWASP Top 10 vulnerabilities, leaked API keys, unsafe inputs, injection flaws, etc.
+- Provide detailed reports of any vulnerabilities found, including the file path, the affected lines, and suggestions for remediation.
 `;
     }
 

@@ -186,6 +186,7 @@ async function runSetupWizard() {
     });
 
     const config = await setupProvider(provider);
+    config.useMemory = true;
 
     await saveConfig(config);
     console.log(chalk.yellow.bold("\nYou're all peeled and ready. Type your first message!\n"));

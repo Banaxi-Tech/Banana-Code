@@ -6,7 +6,7 @@ import chalk from 'chalk';
 import { loadConfig } from './config.js';
 import { listSessions, loadSession } from './sessions.js';
 
-export async function startApiServer(port = 3000, createProvider) {
+export async function startApiServer(port = 3000, createProvider, host = '127.0.0.1') {
     const app = express();
     const server = http.createServer(app);
     const wss = new WebSocketServer({ server });
@@ -140,8 +140,8 @@ export async function startApiServer(port = 3000, createProvider) {
         res.json({ status: 'running', provider: config.provider, model: config.model });
     });
 
-    server.listen(port, () => {
-        console.log(chalk.green.bold(`\n🍌 Banana Code API Server running at http://localhost:${port}`));
+    server.listen(port, host, () => {
+        console.log(chalk.green.bold(`\n🍌 Banana Code API Server running at http://${host}:${port}`));
         console.log(chalk.gray(`WebSocket streaming enabled on the same port.\n`));
     });
 }
