@@ -146,6 +146,63 @@ export async function setupProvider(provider, config = {}) {
                 choices: OPENAI_MODELS
             });
         }
+    } else if (provider === 'openrouter') {
+        config.apiKey = await input({
+            message: 'Enter your OPENROUTER_API_KEY (from openrouter.ai/keys):',
+            default: config.apiKey
+        });
+
+        let modelAccepted = false;
+        while (!modelAccepted) {
+            const modelId = await input({
+                message: 'Enter the OpenRouter model ID (e.g., nvidia/nemotron-3-super-120b-a12b:free):',
+                default: config.model || '',
+                validate: (v) => v.trim().length > 0 || 'Model ID cannot be empty'
+            });
+
+            console.log(chalk.cyan(`\nValidating model "${modelId}" on OpenRouter...`));
+            try {
+                const res = await fetch('https://openrouter.ai/api/v1/models');
+                const data = await res.json();
+                const found = data.data?.find(m => m.id === modelId.trim());
+
+                if (!found) {
+                    console.log(chalk.red(`Model "${modelId}" was not found on OpenRouter.`));
+                    console.log(chalk.yellow('Browse available models at: https://openrouter.ai/models'));
+                    const retry = await input({ message: 'Try a different model ID? (y/n):', default: 'y' });
+                    if (retry.toLowerCase() !== 'y') {
+                        config.model = modelId.trim();
+                        modelAccepted = true;
+                        console.log(chalk.yellow('Proceeding anyway — tool calling may not work.'));
+                    }
+                    continue;
+                }
+
+                const supported = found.supported_parameters || [];
+                const hasToolCalling = supported.includes('tools') || supported.includes('tool_choice');
+
+                if (hasToolCalling) {
+                    console.log(chalk.green(`✔ "${modelId}" supports tool calling. Good to go!`));
+                    config.model = modelId.trim();
+                    modelAccepted = true;
+                } else {
+                    console.log(chalk.red(`✘ "${modelId}" does NOT support tool calling.`));
+                    console.log(chalk.gray(`   Supported parameters: ${supported.join(', ') || 'none listed'}`));
+                    console.log(chalk.yellow('Banana Code requires tool calling to function correctly.'));
+                    const retry = await input({ message: 'Choose a different model? (y/n):', default: 'y' });
+                    if (retry.toLowerCase() !== 'y') {
+                        config.model = modelId.trim();
+                        modelAccepted = true;
+                        console.log(chalk.yellow('Proceeding anyway — tool calling will likely fail.'));
+                    }
+                }
+            } catch (err) {
+                console.log(chalk.red(`Could not reach OpenRouter API: ${err.message}`));
+                console.log(chalk.yellow('Skipping validation and using the model ID as-is.'));
+                config.model = modelId.trim();
+                modelAccepted = true;
+            }
+        }
     } else if (provider === 'ollama') {
         console.log(chalk.cyan("Detecting running Ollama models..."));
         try {
@@ -180,6 +237,7 @@ async function runSetupWizard() {
             { name: 'Anthropic Claude', value: 'claude' },
             { name: 'OpenAI', value: 'openai' },
             { name: 'Mistral AI', value: 'mistral' },
+            { name: 'OpenRouter (Any Model)', value: 'openrouter' },
             { name: 'Ollama Cloud', value: 'ollama_cloud' },
             { name: 'Ollama (Local)', value: 'ollama' }
         ]

@@ -7,9 +7,9 @@ export const GEMINI_MODELS = [
 ];
 
 export const CLAUDE_MODELS = [
-    { name: 'Claude Opus 4.6 (Flagship)', value: 'claude-4-6-opus-20260205' },
-    { name: 'Claude Sonnet 4.6 (Fast & Smart)', value: 'claude-4-6-sonnet-20260217' },
-    { name: 'Claude Haiku 4.5', value: 'claude-4-5-haiku-20251015' }
+    { name: 'Claude Opus 4.6 (Flagship)', value: 'claude-opus-4-6' },
+    { name: 'Claude Sonnet 4.6 (Fast & Smart)', value: 'claude-sonnet-4-6' },
+    { name: 'Claude Haiku 4.5', value: 'claude-haiku-4-5' }
 ];
 
 export const OPENAI_MODELS = [

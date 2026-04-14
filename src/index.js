@@ -11,6 +11,7 @@ import { OpenAIProvider } from './providers/openai.js';
 import { OllamaProvider } from './providers/ollama.js';
 import { OllamaCloudProvider } from './providers/ollamaCloud.js';
 import { MistralProvider } from './providers/mistral.js';
+import { OpenRouterProvider } from './providers/openrouter.js';
 
 import { loadSession, saveSession, generateSessionId, getLatestSessionId, listSessions } from './sessions.js';
 import { printMarkdown } from './utils/markdown.js';
@@ -33,6 +34,7 @@ function createProvider(overrideConfig = null) {
         case 'claude': return new ClaudeProvider(activeConfig);
         case 'openai': return new OpenAIProvider(activeConfig);
         case 'mistral': return new MistralProvider(activeConfig);
+        case 'openrouter': return new OpenRouterProvider(activeConfig);
         case 'ollama_cloud': return new OllamaCloudProvider(activeConfig);
         case 'ollama': return new OllamaProvider(activeConfig);
         default:
@@ -57,20 +59,21 @@ async function handleSlashCommand(command) {
                         { name: 'Anthropic Claude', value: 'claude' },
                         { name: 'OpenAI', value: 'openai' },
                         { name: 'Mistral AI', value: 'mistral' },
+                        { name: 'OpenRouter (Any Model)', value: 'openrouter' },
                         { name: 'Ollama Cloud', value: 'ollama_cloud' },
                         { name: 'Ollama (Local)', value: 'ollama' }
                     ]
                 });
             }
 
-            if (['gemini', 'claude', 'openai', 'mistral', 'ollama_cloud', 'ollama'].includes(newProv)) {
+            if (['gemini', 'claude', 'openai', 'mistral', 'openrouter', 'ollama_cloud', 'ollama'].includes(newProv)) {
                 // Use the shared setup logic to get keys/models
                 config = await setupProvider(newProv, config);
                 await saveConfig(config);
                 providerInstance = createProvider();
                 console.log(chalk.green(`Switched provider to ${newProv} (${config.model}).`));
             } else {
-                console.log(chalk.yellow(`Usage: /provider <gemini|claude|openai|mistral|ollama_cloud|ollama>`));
+                console.log(chalk.yellow(`Usage: /provider <gemini|claude|openai|mistral|openrouter|ollama_cloud|ollama>`));
             }
             break;
         case '/model':
@@ -87,6 +90,13 @@ async function handleSlashCommand(command) {
                     choices = config.authType === 'oauth' ? CODEX_MODELS : OPENAI_MODELS;
                 } else if (config.provider === 'mistral') {
                     choices = MISTRAL_MODELS;
+                } else if (config.provider === 'openrouter') {
+                    // Re-run setup flow so the user gets full validation
+                    config = await setupProvider('openrouter', config);
+                    await saveConfig(config);
+                    providerInstance = createProvider();
+                    console.log(chalk.green(`Switched OpenRouter model to ${config.model}.`));
+                    break;
                 } else if (config.provider === 'ollama_cloud') {
                     choices = OLLAMA_CLOUD_MODELS;
                 } else if (config.provider === 'ollama') {
@@ -124,6 +134,29 @@ async function handleSlashCommand(command) {
             }
 
             if (newModel) {
+                if (config.provider === 'openrouter') {
+                    // Validate tool calling support before switching
+                    console.log(chalk.cyan(`Validating "${newModel}" on OpenRouter...`));
+                    try {
+                        const res = await fetch('https://openrouter.ai/api/v1/models');
+                        const data = await res.json();
+                        const found = data.data?.find(m => m.id === newModel);
+                        if (!found) {
+                            console.log(chalk.yellow(`Model "${newModel}" not found on OpenRouter — proceeding anyway.`));
+                        } else {
+                            const supported = found.supported_parameters || [];
+                            const hasToolCalling = supported.includes('tools') || supported.includes('tool_choice');
+                            if (hasToolCalling) {
+                                console.log(chalk.green(`✔ "${newModel}" supports tool calling.`));
+                            } else {
+                                console.log(chalk.red(`✘ "${newModel}" does NOT support tool calling. Banana Code may not work correctly.`));
+                                console.log(chalk.gray(`   Supported parameters: ${supported.join(', ') || 'none listed'}`));
+                            }
+                        }
+                    } catch (err) {
+                        console.log(chalk.yellow(`Could not validate on OpenRouter: ${err.message}`));
+                    }
+                }
                 config.model = newModel;
                 await saveConfig(config);
                 if (providerInstance) {
@@ -571,7 +604,7 @@ async function handleSlashCommand(command) {
         case '/help':
             console.log(chalk.yellow(`
 Available commands:
-  /provider <name> - Switch AI provider (gemini, claude, openai, mistral, ollama_cloud, ollama)
+  /provider <name> - Switch AI provider (gemini, claude, openai, mistral, openrouter, ollama_cloud, ollama)
   /model [name]    - Switch model within current provider (opens menu if name omitted)
   /chats           - List persistent chat sessions
   /clear           - Clear chat history
