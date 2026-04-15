@@ -7,7 +7,7 @@ import { printMarkdown } from '../utils/markdown.js';
 export class OllamaProvider {
     constructor(config) {
         this.config = config;
-        this.modelName = config.model || 'llama3';
+        this.modelName = config.model === 'auto' ? 'llama3' : (config.model || 'llama3');
         this.systemPrompt = getSystemPrompt(config);
         this.messages = [{ role: 'system', content: this.systemPrompt }];
         this.tools = getAvailableTools(config).map(t => ({

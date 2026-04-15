@@ -49,9 +49,10 @@ While tools like Cursor provide great GUI experiences, Banana Code is built for 
 
 ## ✨ Key Features
 
-- **Multi-Provider Support**: Switch between **Google Gemini**, **Anthropic Claude**, **OpenAI**, **Mistral AI**, **Ollama Cloud**, and **Ollama (Local)** effortlessly.
+- **Multi-Provider Support**: Switch between **Google Gemini**, **Anthropic Claude**, **OpenAI** (API key or ChatGPT / Codex OAuth), **Mistral AI**, **OpenRouter** (any model ID; see [OpenRouter setup](#openrouter-setup)), **Ollama Cloud**, and **Ollama (Local)** effortlessly.
+- **Auto Mode**: For most providers, pick **Auto Mode** as your model — a small “router” model reads your prompt and chooses which model to use for that turn (with a short reason). Local Ollama and OpenRouter do not offer Auto Mode.
 - **Model Context Protocol (MCP)**: Connect Banana Code to any community-built MCP server (like SQLite, GitHub, Google Maps) to give your AI infinite new superpowers via `/beta`.
-- **Plan & Agent Modes**: Use `/agent` for instant execution, or `/plan` to make the AI draft a step-by-step implementation plan for your approval before it touches any code.
+- **Plan & Agent Modes**: Use `/agent` for normal execution, **`/plan`** for [Plan mode](#plan-mode), **`/ask`** for [Ask mode](#ask-mode) (read-only Q&A), or **`/security`** for [Security mode](#security-mode) (vulnerability-focused reviews).
 - **Hierarchical Sub-Agents**: The main AI can spawn specialized "sub-agents" (Researchers, Coders, Reviewers) to handle complex tasks without polluting your main chat history.
 - **Self-Healing Loop**: If the AI runs a command (like running tests) and it fails, Banana Code automatically feeds the error trace back to the AI so it can fix its own code.
 - **Agent Skills**: Teach your AI specialized workflows. Drop a `SKILL.md` file in your config folder, and the AI will automatically activate it when relevant.
@@ -78,7 +79,7 @@ On your first run, Banana Code will walk you through a quick setup to configure 
 banana
 ```
 
-You'll need your API keys handy for Gemini, Claude, or OpenAI (if not using the OAuth sign-in).
+You'll need your API keys handy for Gemini, Claude, OpenAI (unless you use ChatGPT sign-in), Mistral, Ollama Cloud, or OpenRouter. For **OpenRouter**, you enter an API key and a custom model ID; Banana Code checks OpenRouter’s model list so the model supports **tool calling** before continuing.
 
 ## 📖 Usage
 
@@ -87,35 +88,114 @@ You'll need your API keys handy for Gemini, Claude, or OpenAI (if not using the 
 banana
 ```
 
+Optional flags:
+
+| Flag | Effect |
+|------|--------|
+| `--yolo` | Start with YOLO mode on (same as `/yolo` in-app: auto-approve permission prompts). |
+| `--resume [uuid]` | Resume a session; UUID optional (latest session if omitted). |
+
 ### Resume a Session
 To continue where you left off, use the `--resume` flag with your session UUID:
 ```bash
 banana --resume <uuid>
 ```
+Omit `<uuid>` to resume the **most recently updated** saved session.
 
 ### In-App Commands
-While in a chat, use these special commands:
-- `/provider`: Switch AI provider (gemini, claude, openai, mistral, ollama_cloud, ollama).
-- `/model`: Switch the active AI model on the fly.
-- `/chats`: Open an interactive menu to view and resume past auto-titled chat sessions.
-- `/clean`: Compress your current chat history into a dense summary to save tokens.
-- `/memory`: Manage your global AI memories (facts the AI remembers across all projects).
-- `/init`: Analyze the current project and generate a `BANANA.md` summary for instant context.
-- `/context`: View your current message count and estimated token usage.
-- `/settings`: Toggle UI features like syntax highlighting and auto-workspace feeding.
-- `/plan` & `/agent`: Toggle between Plan & Execute mode and standard Agent mode.
-- `/beta`: Enable experimental features like MCP Support and Sub-Agents.
-- `/clear`: Clear the current chat history.
-- `/exit` or `CTRL+D`: Save and exit the session.
+While in a chat, use these special commands (type `/help` for the full list):
+
+| Command | What it does |
+|--------|----------------|
+| `/provider` | Switch provider: `gemini`, `claude`, `openai`, `mistral`, `openrouter`, `ollama_cloud`, `ollama` |
+| `/model` | Change model; omit the name to open the menu (includes **Auto Mode** where supported). |
+| `/chats` | Browse and resume saved sessions (auto-titled). |
+| `/clear` | Clear the current conversation (same provider/model). |
+| `/clean` | Summarize long history into a short memory to save tokens (beta; enable in `/beta`). |
+| `/context` | Show message count and estimated tokens. |
+| `/settings` | Workspace auto-feed, markdown/syntax output, patch tool, token count in status bar, global memory. |
+| `/beta` | Beta tools (e.g. MCP, optional scrapers, `/clean`). |
+| `/memory` | View, add, or delete global memories (needs memory enabled in `/settings`). |
+| `/skills` | List loaded Agent Skills from `~/.config/banana-code/skills/`. |
+| `/init` | Generate `BANANA.md` project summary in the current directory. |
+| `/permissions` | List permissions granted for this session. |
+| `/debug` | Toggle debug output (e.g. tool results, auto-route diagnostics). |
+| `/plan` | Plan mode: AI outlines a plan before large edits. |
+| `/agent` | Default: AI applies changes directly. |
+| `/ask` | [Ask mode](#ask-mode): questions and explanations only; no project edits. |
+| `/security` | Security-focused review mode (defensive use only). |
+| `/yolo` | Auto-approve permission prompts (use with care). |
+| `/help` | Show all commands. |
+| `/exit` | Quit (also `Ctrl+D` / `Ctrl+C` flow). |
+
+**File context:** Type `@path/to/file` or `@@/absolute/path` in your message to attach file contents to that prompt.
+
+### ⚡ Auto Mode
+When **Auto Mode** is selected as the model (`/model` or initial setup), each new user message is first sent to a **small, fast router model** (per provider) together with the **last seven conversation messages** (formatted as context only). The router returns JSON: which concrete model should handle **this** turn and a short reason—so short follow-ups like “Implement it” can pick a capable model when the history shows a large task. The assistant’s reply then uses that model. If routing fails, providers fall back to a sensible default (e.g. Gemini may fall back to **Gemini 3 Flash**). **OpenRouter** and **local Ollama** do not offer Auto Mode (fixed model ID vs. local tag list).
+
+### OpenRouter setup
+
+[OpenRouter](https://openrouter.ai) lets you use many models behind one API. In Banana Code, choose **OpenRouter** in `/provider`, paste your OpenRouter API key, then enter a **model ID** (e.g. `org/model:free`). Banana Code loads OpenRouter’s public model list and checks that the model advertises tool support (`tools` / `tool_choice` in `supported_parameters`) so Banana’s tools can run. Routing uses the same OpenAI-compatible Chat Completions API at `https://openrouter.ai/api/v1`.
+
+### 🎛️ Operating modes
+Banana Code layers **behavior modes** on top of the normal agent. Only one “style” mode is active at a time (`/plan`, `/ask`, `/security`, or default agent). The status bar shows **PLAN MODE**, **ASK MODE**, or **SECURITY MODE** when relevant.
+
+| Command | Role |
+|--------|------|
+| **`/agent`** | Default: full coding agent with tools (subject to permissions). |
+| **`/plan`** | [Plan mode](#plan-mode) — propose a written plan before larger edits. |
+| **`/ask`** | [Ask mode](#ask-mode) — read-only Q&A; no file or state-changing edits. |
+| **`/security`** | [Security mode](#security-mode) — prioritize vulnerability review. |
+| **`/yolo`** | Auto-approve permission prompts (dangerous; use carefully). |
+
+### Plan mode
+
+Enable with **`/plan`**. The system prompt switches to **Plan Mode**: the model is told to treat you as someone who wants a clear plan before risky or wide-reaching work.
+
+**Behavior**
+
+- **Small or trivial changes** (e.g. a typo, a one-line fix) may still be applied directly with tools.
+- **Significant work** — anything that touches multiple areas, adds a feature, or has broad impact — should **not** start with `write_file` / `patch_file`. The model should instead output an **implementation plan** (files to touch, ordered steps).
+- It should **pause** and ask whether the plan looks good before editing.
+- **File-changing tools** for those larger tasks are only appropriate **after** you explicitly approve the plan.
+
+Return to normal behavior with **`/agent`** (or switch to another mode). Plan mode is meant to reduce surprise edits and keep big refactors reviewable.
+
+### Ask mode
+
+Enable with **`/ask`**. The system prompt switches to **Ask Mode**: the assistant is restricted to **answering questions**, **explaining code**, and **gathering information** — not changing your project.
+
+**Behavior**
+
+- The model **must not** modify the codebase: no `write_file`, `patch_file`, or shell commands that change state (installing packages, deleting files, etc.).
+- It **may** use **read-only** tools to help answer you: e.g. `read_file`, `search_files`, `list_directory`, and **non-mutating** `execute_command` runs such as `git status` or running tests to report output.
+
+Use Ask mode when you want explanations, design discussion, or code review without accidental edits. Return to the default coding agent with **`/agent`**, or switch to **`/plan`** or **`/security`** if you want those modes instead.
+
+### Security mode
+
+Enable with **`/security`**. The system prompt switches to **Security Mode**: the model prioritizes **finding and explaining** security issues in **your** codebase.
+
+**Behavior**
+
+- Focus on vulnerabilities, misconfigurations, and unsafe patterns (e.g. injection, auth issues, secret leakage, OWASP-style issues).
+- Output should include **actionable detail**: affected paths, what’s wrong, and remediation ideas.
+
+**Responsible use**
+
+Banana Code is for **defensive** work on software you own or are authorized to test. Do not use Security mode to probe systems without permission or to develop exploits. Return to normal coding with **`/agent`** when you’re done reviewing.
 
 ### Available Tools
 Banana Code can assist you by:
 - **`execute_command`**: Running shell commands (git, npm, ls, etc.).
 - **`read_file`**: Reading local source code.
 - **`write_file`**: Creating or editing files.
+- **`patch_file`**: Targeted search-and-replace style edits (on by default; disable in `/settings`).
 - **`fetch_url`**: Browsing web documentation.
 - **`search_files`**: Performing regex searches across your project.
 - **`list_directory`**: Exploring folder structures.
+
+Additional tools appear when you enable beta features in `/beta` (e.g. web search, MCP tools) or when the model exposes them.
 
 ### 🧠 Agent Skills
 Banana Code supports custom Agent Skills. Skills are like "onboarding guides" that teach the AI how to do specific tasks, use certain APIs, or follow your company's coding standards. 
@@ -200,26 +280,18 @@ Banana Code streams data back to the client in real-time chunks:
 - `{"type": "done", "finalResponse": "..."}`
 
 ### Remote Tool Approval (Security)
-If the AI decides to run a shell command or patch a file, Banana Code pauses execution and sends a permission ticket to your GUI:
+If the AI decides to run a shell command or patch a file, Banana Code pauses execution and sends a permission ticket to your GUI (single-line JSON messages):
 
 ```json
-{
-  "type": "permission_requested",
-  "ticketId": "5c9b2a...",
-  "action": "Execute Command",
-  "details": "sensors"
-}
+{"type":"permission_requested","ticketId":"5c9b2a...","action":"Execute Command","details":"sensors"}
 ```
 
 Your GUI must present a dialog to the user and respond with the same `ticketId` to resume execution:
+
 ```json
-{
-  "type": "permission_response",
-  "ticketId": "5c9b2a...",
-  "allowed": true,
-  "session": true
-}
+{"type":"permission_response","ticketId":"5c9b2a...","allowed":true,"session":true}
 ```
+
 If an invalid `ticketId` is provided, Banana Code automatically blocks the tool execution to ensure safety.
 
 ## 🔐 Privacy & Security

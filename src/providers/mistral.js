@@ -4,6 +4,8 @@ import chalk from 'chalk';
 import ora from 'ora';
 import { getSystemPrompt } from '../prompt.js';
 import { printMarkdown } from '../utils/markdown.js';
+import { MISTRAL_MODELS } from '../constants.js';
+import { AUTO_MODEL_DESCRIPTIONS, AUTO_ROUTER_MODELS, buildRoutingPrompt, parseRoutingResponse, openAIMessagesToAutoRouterHistory } from '../utils/autoModel.js';
 
 export class MistralProvider {
     constructor(config) {
@@ -32,7 +34,34 @@ export class MistralProvider {
         }
     }
 
+    async autoRoute(message) {
+        const historyText = openAIMessagesToAutoRouterHistory(this.messages || []);
+        const models = MISTRAL_MODELS.map(m => ({
+            id: m.value,
+            description: AUTO_MODEL_DESCRIPTIONS[m.value] || m.name
+        }));
+        const prompt = buildRoutingPrompt(models, message, historyText);
+        try {
+            const resp = await this.openai.chat.completions.create({
+                model: AUTO_ROUTER_MODELS.mistral,
+                messages: [{ role: 'user', content: prompt }],
+                stream: false
+            });
+            const text = resp.choices[0]?.message?.content || '';
+            const result = parseRoutingResponse(text);
+            if (result && models.some(m => m.id === result.model)) return result;
+        } catch (e) {}
+        return { model: MISTRAL_MODELS[0].value, reason: 'Auto-routing failed, using most capable model.' };
+    }
+
     async sendMessage(message) {
+        let activeModel = this.modelName;
+        if (this.modelName === 'auto') {
+            const routing = await this.autoRoute(message);
+            activeModel = routing.model;
+            console.log(chalk.magenta(`\n[Auto Mode] → ${chalk.yellow(activeModel)}: ${routing.reason}`));
+        }
+
         this.messages.push({ role: 'user', content: message });
 
         let spinner = ora({ text: 'Thinking...', color: 'yellow', stream: process.stdout }).start();
@@ -43,7 +72,7 @@ export class MistralProvider {
                 let stream = null;
                 try {
                     stream = await this.openai.chat.completions.create({
-                        model: this.modelName,
+                        model: activeModel,
                         messages: this.messages,
                         tools: this.tools.length > 0 ? this.tools : undefined,
                         stream: true

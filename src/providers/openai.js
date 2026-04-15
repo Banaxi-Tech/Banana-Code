@@ -7,6 +7,8 @@ import path from 'path';
 import fsSync from 'fs';
 import { getSystemPrompt } from '../prompt.js';
 import { printMarkdown } from '../utils/markdown.js';
+import { OPENAI_MODELS, CODEX_MODELS } from '../constants.js';
+import { AUTO_MODEL_DESCRIPTIONS, AUTO_ROUTER_MODELS, buildRoutingPrompt, parseRoutingResponse, openAIMessagesToAutoRouterHistory } from '../utils/autoModel.js';
 
 /**
  * Notice: Parts of the OAuth authentication flow and SSE streaming logic in this file 
@@ -39,9 +41,127 @@ export class OpenAIProvider {
         }
     }
 
+    async autoRoute(message) {
+        const isOAuth = this.config.authType === 'oauth';
+        const modelList = isOAuth ? CODEX_MODELS : OPENAI_MODELS;
+        const historyText = openAIMessagesToAutoRouterHistory(this.messages || []);
+
+        if (isOAuth) {
+            // Use the same OAuth API with the cheapest Codex model to route
+            const models = modelList.map(m => ({
+                id: m.value,
+                description: AUTO_MODEL_DESCRIPTIONS[m.value] || m.name
+            }));
+            const prompt = buildRoutingPrompt(models, message, historyText);
+            try {
+                const authFile = path.join(os.homedir(), '.codex', 'auth.json');
+                const session = JSON.parse(fsSync.readFileSync(authFile, 'utf-8'));
+                const accessToken = session?.tokens?.access_token || session.access_token || session.accessToken;
+                const accountId  = session?.tokens?.account_id  || session.account_id;
+                if (!accessToken || !accountId) throw new Error('Missing OAuth token');
+
+                const payload = {
+                    model: AUTO_ROUTER_MODELS.openai_oauth,
+                    instructions: 'You are a model router. Reply only with the requested JSON.',
+                    input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: prompt }] }],
+                    tools: [],
+                    store: false,
+                    stream: true,
+                    include: ["reasoning.encrypted_content"],
+                    reasoning: { effort: "low", summary: "concise" },
+                    text: { verbosity: "low" }
+                };
+                
+
+                const response = await fetch('https://chatgpt.com/backend-api/codex/responses', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                        'Content-Type': 'application/json',
+                        'chatgpt-account-id': accountId,
+                        'OpenAI-Beta': 'responses=experimental',
+                        'originator': 'codex_cli_rs',
+                        'Accept': 'text/event-stream'
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    const errBody = await response.text();
+                    throw new Error(`HTTP ${response.status}: ${errBody}`);
+                }
+
+                // Collect streaming text
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let text = '';
+                let lineBuffer = '';
+                let currentEvent = '';
+
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    lineBuffer += decoder.decode(value);
+                    const lines = lineBuffer.split('\n');
+                    lineBuffer = lines.pop();
+                    for (const line of lines) {
+                        if (line.startsWith('event: ')) {
+                            currentEvent = line.substring(7).trim();
+                        } else if (line.startsWith('data: ') && currentEvent === 'response.output_text.delta') {
+                            try { text += JSON.parse(line.substring(6)).delta; } catch (e) {}
+                        }
+                    }
+                }
+
+                const result = parseRoutingResponse(text);
+                if (result && models.some(m => m.id === result.model)) return result;
+                if (this.config.debug) {
+                    console.error(chalk.yellow(`\n[DEBUG] Auto-route parsing failed. Raw response: ${text}`));
+                }
+            } catch (e) {
+                if (this.config.debug) {
+                    console.error(chalk.yellow(`\n[DEBUG] Auto-route error: ${e.message}`));
+                }
+            }
+            return { model: modelList[0].value, reason: 'Auto-routing failed, using most capable model.' };
+        }
+
+        // API key mode — call the cheapest model to route
+        const models = modelList.map(m => ({
+            id: m.value,
+            description: AUTO_MODEL_DESCRIPTIONS[m.value] || m.name
+        }));
+        const prompt = buildRoutingPrompt(models, message, historyText);
+        try {
+            const resp = await this.openai.chat.completions.create({
+                model: AUTO_ROUTER_MODELS.openai,
+                messages: [{ role: 'user', content: prompt }],
+                stream: false
+            });
+            const text = resp.choices[0]?.message?.content || '';
+            const result = parseRoutingResponse(text);
+            if (result && models.some(m => m.id === result.model)) return result;
+            if (this.config.debug) {
+                console.error(chalk.yellow(`\n[DEBUG] Auto-route parsing failed. Raw response: ${text}`));
+            }
+        } catch (e) {
+            if (this.config.debug) {
+                console.error(chalk.yellow(`\n[DEBUG] Auto-route error: ${e.message}`));
+            }
+        }
+        return { model: modelList[0].value, reason: 'Auto-routing failed, using most capable model.' };
+    }
+
     async sendMessage(message) {
         if (this.config.authType === 'oauth') {
             return await this.sendOauthMessage(message);
+        }
+
+        let activeModel = this.modelName;
+        if (this.modelName === 'auto') {
+            const routing = await this.autoRoute(message);
+            activeModel = routing.model;
+            console.log(chalk.magenta(`\n[Auto Mode] → ${chalk.yellow(activeModel)}: ${routing.reason}`));
         }
 
         this.messages.push({ role: 'user', content: message });
@@ -54,7 +174,7 @@ export class OpenAIProvider {
                 let stream = null;
                 try {
                     stream = await this.openai.chat.completions.create({
-                        model: this.modelName,
+                        model: activeModel,
                         messages: this.messages,
                         tools: this.tools,
                         stream: true
@@ -123,7 +243,7 @@ export class OpenAIProvider {
                     content: chunkResponse || null
                 });
 
-                for (const call of activeToolCalls || toolCalls) {
+                for (const call of toolCalls) {
                     if (this.config.isApiMode && this.onToolStart) {
                         this.onToolStart(call.function.name);
                     }
@@ -161,6 +281,13 @@ export class OpenAIProvider {
     }
 
     async sendOauthMessage(message) {
+        let activeOauthModel = this.modelName;
+        if (this.modelName === 'auto') {
+            const routing = await this.autoRoute(message);
+            activeOauthModel = routing.model;
+            console.log(chalk.magenta(`\n[Auto Mode] → ${chalk.yellow(activeOauthModel)}: ${routing.reason}`));
+        }
+
         this.messages.push({ role: 'user', content: message });
 
         const authFile = path.join(os.homedir(), '.codex', 'auth.json');
@@ -233,7 +360,7 @@ export class OpenAIProvider {
                 const backendTools = mapToolsToBackend(this.tools);
 
                 const payload = {
-                    model: this.modelName || 'gpt-5.1-codex',
+                    model: activeOauthModel || 'gpt-5.2',
                     instructions: this.systemPrompt,
                     input: backendInput,
                     tools: backendTools,

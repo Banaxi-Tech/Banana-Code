@@ -26,8 +26,6 @@ export const OLLAMA_CLOUD_MODELS = [
     { name: 'DeepSeek V3.2 (Cloud)', value: 'deepseek-v3.2:cloud' },
     { name: 'GLM-5.1 (Cloud)', value: 'glm-5.1:cloud' },
     { name: 'MiniMax M2.7 (Cloud)', value: 'minimax-m2.7:cloud' },
-    { name: 'Llama 3.3 70B (Cloud)', value: 'llama3.3:cloud' },
-    { name: 'Llama 3.1 405B (Cloud)', value: 'llama3.1:405b-cloud' },
     { name: 'Gemma 4 31B (Cheapest, Very Good Code)', value: 'gemma4:31b-cloud' }
 ];
 
@@ -44,8 +42,5 @@ export const CODEX_MODELS = [
     { name: 'GPT-5.4 (Newest)', value: 'gpt-5.4' },
     { name: 'GPT-5.3 Codex', value: 'gpt-5.3-codex' },
     { name: 'GPT-5.2 Codex', value: 'gpt-5.2-codex' },
-    { name: 'GPT-5.2 (General)', value: 'gpt-5.2' },
-    { name: 'GPT-5.1 Codex Max', value: 'gpt-5.1-codex-max' },
-    { name: 'GPT-5.1 Codex (Balanced)', value: 'gpt-5.1-codex' },
-    { name: 'GPT-4o Codex', value: 'gpt-4o-codex' }
+    { name: 'GPT-5.2 (General, Cheapest)', value: 'gpt-5.2' }
 ];

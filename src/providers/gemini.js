@@ -3,12 +3,29 @@ import chalk from 'chalk';
 import ora from 'ora';
 import { getSystemPrompt } from '../prompt.js';
 import { printMarkdown } from '../utils/markdown.js';
+import { GEMINI_MODELS } from '../constants.js';
+import { AUTO_MODEL_DESCRIPTIONS, AUTO_ROUTER_MODELS, buildRoutingPrompt, parseRoutingResponse, geminiMessagesToAutoRouterHistory } from '../utils/autoModel.js';
+
+/** When Gemini Auto Mode routing fails, use this model instead of the first list entry (2.5 Flash). */
+const GEMINI_AUTO_FALLBACK_MODEL = 'gemini-3-flash-preview';
+
+/** Minimal request to `gemini-3.1-pro-preview` — success implies paid-tier access for Auto routing. */
+const GEMINI_PAID_TIER_PROBE_MODEL = 'gemini-3.1-pro-preview';
+
+/** Auto Mode may only pick these when the API key is on free tier (probe fails or reports free-tier quota). */
+const GEMINI_AUTO_FREE_TIER_MODEL_IDS = new Set([
+    'gemini-2.5-flash',
+    'gemini-3-flash-preview',
+    'gemini-3.1-flash-lite-preview'
+]);
 
 export class GeminiProvider {
     constructor(config) {
         this.config = config;
         this.apiKey = config.apiKey;
         this.modelName = config.model || 'gemini-2.5-flash';
+        /** @type {boolean | undefined} cached result of paid-tier probe (Gemini Auto Mode only) */
+        this._geminiPaidTierProbeCache = undefined;
         this.messages = [];
         this.tools = getAvailableTools(config).map(t => ({
             name: t.name,
@@ -22,7 +39,110 @@ export class GeminiProvider {
         this.systemPrompt = newPrompt;
     }
 
+    /**
+     * One cheap `generateContent` to gemini-3.1-pro-preview. If it succeeds, the key can use paid models in Auto.
+     * If the error payload mentions free-tier quota (`free_tier`, etc.), only free-tier Flash models are offered to the router.
+     */
+    async probeGeminiPaidTierForAuto() {
+        if (this._geminiPaidTierProbeCache !== undefined) {
+            return this._geminiPaidTierProbeCache;
+        }
+        try {
+            const resp = await fetch(
+                `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_PAID_TIER_PROBE_MODEL}:generateContent?key=${this.apiKey}`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{ parts: [{ text: 'hi' }] }],
+                        generationConfig: { maxOutputTokens: 1 }
+                    })
+                }
+            );
+            const data = await resp.json();
+            if (this.config.debug) {
+                const preview = JSON.stringify(data);
+                console.error(chalk.gray(`\n[DEBUG] Gemini paid-tier probe HTTP ${resp.status}: ${preview.length > 800 ? preview.slice(0, 800) + '…' : preview}`));
+            }
+            if (resp.ok && data.candidates?.[0]) {
+                this._geminiPaidTierProbeCache = true;
+                return true;
+            }
+            const errBlob = JSON.stringify(data.error ?? data);
+            if (/free_tier|FreeTier|free tier/i.test(errBlob) || /generativelanguage\.googleapis\.com\/generate_content_free_tier/i.test(errBlob)) {
+                this._geminiPaidTierProbeCache = false;
+                if (this.config.debug) {
+                    console.error(chalk.cyan(`\n[DEBUG] Gemini Auto: free-tier API — router limited to Flash models only.`));
+                }
+                return false;
+            }
+            this._geminiPaidTierProbeCache = false;
+            return false;
+        } catch (e) {
+            if (this.config.debug) {
+                console.error(chalk.yellow(`\n[DEBUG] Gemini paid-tier probe error: ${e.message}`));
+            }
+            this._geminiPaidTierProbeCache = false;
+            return false;
+        }
+    }
+
+    async autoRoute(message) {
+        const historyText = geminiMessagesToAutoRouterHistory(this.messages || []);
+        const paidTier = await this.probeGeminiPaidTierForAuto();
+        const modelSource = paidTier
+            ? GEMINI_MODELS
+            : GEMINI_MODELS.filter((m) => GEMINI_AUTO_FREE_TIER_MODEL_IDS.has(m.value));
+        const models = modelSource.map(m => ({
+            id: m.value,
+            description: AUTO_MODEL_DESCRIPTIONS[m.value] || m.name
+        }));
+        const prompt = buildRoutingPrompt(models, message, historyText);
+        try {
+            const resp = await fetch(
+                `https://generativelanguage.googleapis.com/v1beta/models/${AUTO_ROUTER_MODELS.gemini}:generateContent?key=${this.apiKey}`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }] })
+                }
+            );
+            const data = await resp.json();
+            if (!resp.ok) {
+                if (this.config.debug) {
+                    console.error(chalk.yellow(`\n[DEBUG] Gemini auto-route HTTP ${resp.status}: ${JSON.stringify(data)}`));
+                }
+                return { model: GEMINI_AUTO_FALLBACK_MODEL, reason: 'Auto-routing failed, using fallback model.' };
+            }
+            if (data.error && this.config.debug) {
+                console.error(chalk.yellow(`\n[DEBUG] Gemini auto-route API error: ${JSON.stringify(data.error)}`));
+            }
+            const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            const blockReason = data.candidates?.[0]?.finishReason;
+            if (!text && this.config.debug) {
+                console.error(chalk.yellow(`\n[DEBUG] Gemini auto-route empty text. finishReason=${blockReason} raw=${JSON.stringify(data)}`));
+            }
+            const result = parseRoutingResponse(text);
+            if (result && models.some(m => m.id === result.model)) return result;
+            if (this.config.debug) {
+                console.error(chalk.yellow(`\n[DEBUG] Gemini auto-route parse failed. Extracted text: ${JSON.stringify(text)}`));
+            }
+        } catch (e) {
+            if (this.config.debug) {
+                console.error(chalk.yellow(`\n[DEBUG] Gemini auto-route error: ${e.message}`));
+            }
+        }
+        return { model: GEMINI_AUTO_FALLBACK_MODEL, reason: 'Auto-routing failed, using fallback model.' };
+    }
+
     async sendMessage(message) {
+        let activeModel = this.modelName;
+        if (this.modelName === 'auto') {
+            const routing = await this.autoRoute(message);
+            activeModel = routing.model;
+            console.log(chalk.magenta(`\n[Auto Mode] → ${chalk.yellow(activeModel)}: ${routing.reason}`));
+        }
+
         this.messages.push({ role: 'user', parts: [{ text: message }] });
 
         let spinner = ora({ text: 'Thinking...', color: 'yellow', stream: process.stdout }).start();
@@ -31,7 +151,7 @@ export class GeminiProvider {
         try {
             while (true) {
                 let currentTurnText = '';
-                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${this.modelName}:streamGenerateContent?alt=sse&key=${this.apiKey}`, {
+                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${activeModel}:streamGenerateContent?alt=sse&key=${this.apiKey}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({

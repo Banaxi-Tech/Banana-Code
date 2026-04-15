@@ -35,6 +35,8 @@ export async function saveConfig(config) {
 export async function setupProvider(provider, config = {}) {
     config.provider = provider;
 
+    const AUTO_CHOICE = { name: chalk.cyan('⚡ Auto Mode') + chalk.gray(' (AI picks the best model per prompt)'), value: 'auto' };
+
     if (provider === 'gemini') {
         config.apiKey = await input({
             message: 'Enter your GEMINI_API_KEY:',
@@ -42,7 +44,7 @@ export async function setupProvider(provider, config = {}) {
         });
         config.model = await select({
             message: 'Select a Gemini model:',
-            choices: GEMINI_MODELS
+            choices: [AUTO_CHOICE, ...GEMINI_MODELS]
         });
     } else if (provider === 'ollama_cloud') {
             config.apiKey = await input({
@@ -50,7 +52,7 @@ export async function setupProvider(provider, config = {}) {
                 default: config.apiKey
             });
 
-            const choices = [...OLLAMA_CLOUD_MODELS, { name: chalk.magenta('✎ Enter custom model ID...'), value: 'CUSTOM_ID' }];
+            const choices = [AUTO_CHOICE, ...OLLAMA_CLOUD_MODELS, { name: chalk.magenta('✎ Enter custom model ID...'), value: 'CUSTOM_ID' }];
             let selectedModel = await select({
                 message: 'Select an Ollama Cloud model:',
                 choices,
@@ -72,7 +74,7 @@ export async function setupProvider(provider, config = {}) {
         });
         config.model = await select({
             message: 'Select a Claude model:',
-            choices: CLAUDE_MODELS
+            choices: [AUTO_CHOICE, ...CLAUDE_MODELS]
         });
     } else if (provider === 'mistral') {
         config.apiKey = await input({
@@ -80,7 +82,7 @@ export async function setupProvider(provider, config = {}) {
             default: config.apiKey
         });
         
-        const choices = [...MISTRAL_MODELS, { name: chalk.magenta('✎ Enter custom model ID...'), value: 'CUSTOM_ID' }];
+        const choices = [AUTO_CHOICE, ...MISTRAL_MODELS, { name: chalk.magenta('✎ Enter custom model ID...'), value: 'CUSTOM_ID' }];
         let selectedModel = await select({
             message: 'Select a Mistral model:',
             choices,
@@ -126,13 +128,13 @@ export async function setupProvider(provider, config = {}) {
                 });
                 config.model = await select({
                     message: 'Select a model:',
-                    choices: OPENAI_MODELS
+                    choices: [AUTO_CHOICE, ...OPENAI_MODELS]
                 });
             } else {
                 console.log(chalk.green("OAuth token found!"));
                 config.model = await select({
                     message: 'Select a Codex model:',
-                    choices: CODEX_MODELS
+                    choices: [AUTO_CHOICE, ...CODEX_MODELS]
                 });
             }
         } else {
@@ -143,7 +145,7 @@ export async function setupProvider(provider, config = {}) {
             });
             config.model = await select({
                 message: 'Select a model:',
-                choices: OPENAI_MODELS
+                choices: [AUTO_CHOICE, ...OPENAI_MODELS]
             });
         }
     } else if (provider === 'openrouter') {
@@ -213,7 +215,7 @@ export async function setupProvider(provider, config = {}) {
                 config.model = await select({
                     message: 'Select a model:',
                     choices: models.map(m => ({ name: m, value: m })),
-                    default: config.model
+                    default: config.model && config.model !== 'auto' ? config.model : undefined
                 });
             } else {
                 console.log(chalk.yellow("No models found. Please pull a model using `ollama pull <model>` later."));

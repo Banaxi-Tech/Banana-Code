@@ -4,6 +4,8 @@ import chalk from 'chalk';
 import ora from 'ora';
 import { getSystemPrompt } from '../prompt.js';
 import { printMarkdown } from '../utils/markdown.js';
+import { CLAUDE_MODELS } from '../constants.js';
+import { AUTO_MODEL_DESCRIPTIONS, AUTO_ROUTER_MODELS, buildRoutingPrompt, parseRoutingResponse, claudeMessagesToAutoRouterHistory } from '../utils/autoModel.js';
 
 export class ClaudeProvider {
     constructor(config) {
@@ -23,7 +25,34 @@ export class ClaudeProvider {
         this.systemPrompt = newPrompt;
     }
 
+    async autoRoute(message) {
+        const historyText = claudeMessagesToAutoRouterHistory(this.messages || []);
+        const models = CLAUDE_MODELS.map(m => ({
+            id: m.value,
+            description: AUTO_MODEL_DESCRIPTIONS[m.value] || m.name
+        }));
+        const prompt = buildRoutingPrompt(models, message, historyText);
+        try {
+            const resp = await this.anthropic.messages.create({
+                model: AUTO_ROUTER_MODELS.claude,
+                max_tokens: 256,
+                messages: [{ role: 'user', content: prompt }]
+            });
+            const text = resp.content[0]?.text || '';
+            const result = parseRoutingResponse(text);
+            if (result && models.some(m => m.id === result.model)) return result;
+        } catch (e) {}
+        return { model: CLAUDE_MODELS[0].value, reason: 'Auto-routing failed, using most capable model.' };
+    }
+
     async sendMessage(message) {
+        let activeModel = this.modelName;
+        if (this.modelName === 'auto') {
+            const routing = await this.autoRoute(message);
+            activeModel = routing.model;
+            console.log(chalk.magenta(`\n[Auto Mode] → ${chalk.yellow(activeModel)}: ${routing.reason}`));
+        }
+
         this.messages.push({ role: 'user', content: message });
 
         let spinner = ora({ text: 'Thinking...', color: 'yellow', stream: process.stdout }).start();
@@ -34,7 +63,7 @@ export class ClaudeProvider {
                 let stream = null;
                 try {
                     stream = await this.anthropic.messages.create({
-                        model: this.modelName,
+                        model: activeModel,
                         max_tokens: 4096,
                         system: this.systemPrompt,
                         messages: this.messages,

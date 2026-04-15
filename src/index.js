@@ -83,13 +83,15 @@ async function handleSlashCommand(command) {
                 const { select } = await import('@inquirer/prompts');
                 const { GEMINI_MODELS, CLAUDE_MODELS, OPENAI_MODELS, CODEX_MODELS, OLLAMA_CLOUD_MODELS, MISTRAL_MODELS } = await import('./constants.js');
 
+                const AUTO_CHOICE = { name: chalk.cyan('⚡ Auto Mode') + chalk.gray(' (AI picks the best model per prompt)'), value: 'auto' };
                 let choices = [];
-                if (config.provider === 'gemini') choices = GEMINI_MODELS;
-                else if (config.provider === 'claude') choices = CLAUDE_MODELS;
+                if (config.provider === 'gemini') choices = [AUTO_CHOICE, ...GEMINI_MODELS];
+                else if (config.provider === 'claude') choices = [AUTO_CHOICE, ...CLAUDE_MODELS];
                 else if (config.provider === 'openai') {
-                    choices = config.authType === 'oauth' ? CODEX_MODELS : OPENAI_MODELS;
+                    const base = config.authType === 'oauth' ? CODEX_MODELS : OPENAI_MODELS;
+                    choices = [AUTO_CHOICE, ...base];
                 } else if (config.provider === 'mistral') {
-                    choices = MISTRAL_MODELS;
+                    choices = [AUTO_CHOICE, ...MISTRAL_MODELS];
                 } else if (config.provider === 'openrouter') {
                     // Re-run setup flow so the user gets full validation
                     config = await setupProvider('openrouter', config);
@@ -98,7 +100,7 @@ async function handleSlashCommand(command) {
                     console.log(chalk.green(`Switched OpenRouter model to ${config.model}.`));
                     break;
                 } else if (config.provider === 'ollama_cloud') {
-                    choices = OLLAMA_CLOUD_MODELS;
+                    choices = [AUTO_CHOICE, ...OLLAMA_CLOUD_MODELS];
                 } else if (config.provider === 'ollama') {
                     try {
                         const response = await fetch('http://localhost:11434/api/tags');
@@ -745,7 +747,8 @@ function drawPromptBox(inputText, cursorPos) {
     }
 
     // Redraw status bar and separator (they are always below the prompt)
-    const modelDisplay = providerInstance ? providerInstance.modelName : (config.model || 'unknown');
+    const rawModel = providerInstance ? providerInstance.modelName : (config.model || 'unknown');
+    const modelDisplay = rawModel === 'auto' ? chalk.cyan('[AUTO]') : rawModel;
     const providerDisplay = config.provider.toUpperCase();
     let modeDisplay = chalk.green('AGENT MODE');
     if (config.askMode) modeDisplay = chalk.blue('ASK MODE');
@@ -768,7 +771,7 @@ function drawPromptBox(inputText, cursorPos) {
         tokenDisplay = ` / Tokens: ${color(tokens.toLocaleString())}`;
     }
     
-    const yoloDisplay = config.yolo ? chalk.bgRed.white.bold(' ⚠️ YOLO ') : '';
+    const yoloDisplay = config.yolo ? chalk.bgRed.white.bold(' YOLO ') : '';
     const leftText = ` Provider: ${chalk.cyan(providerDisplay)} / Model: ${chalk.yellow(modelDisplay)} / ${modeDisplay}${tokenDisplay}${yoloDisplay ? ' / ' + yoloDisplay : ''}`;
     const rightText = '/help for shortcuts ';
     const leftStripped = leftText.replace(/\x1b\[[0-9;]*m/g, '');
@@ -810,7 +813,8 @@ function drawPromptBoxInitial(inputText) {
     }
 
     // Status bar: Current Provider / Model + right-aligned "/help for shortcuts"
-    const modelDisplay = providerInstance ? providerInstance.modelName : (config.model || 'unknown');
+    const rawModel = providerInstance ? providerInstance.modelName : (config.model || 'unknown');
+    const modelDisplay = rawModel === 'auto' ? chalk.cyan('[AUTO]') : rawModel;
     const providerDisplay = config.provider.toUpperCase();
     let modeDisplay = chalk.green('AGENT MODE');
     if (config.askMode) modeDisplay = chalk.blue('ASK MODE');
@@ -833,7 +837,7 @@ function drawPromptBoxInitial(inputText) {
         tokenDisplay = ` / Tokens: ${color(tokens.toLocaleString())}`;
     }
     
-    const yoloDisplay = config.yolo ? chalk.bgRed.white.bold(' ⚠️ YOLO ') : '';
+    const yoloDisplay = config.yolo ? chalk.bgRed.white.bold(' YOLO ') : '';
     const leftText = ` Provider: ${chalk.cyan(providerDisplay)} / Model: ${chalk.yellow(modelDisplay)} / ${modeDisplay}${tokenDisplay}${yoloDisplay ? ' / ' + yoloDisplay : ''}`;
     const rightText = '/help for shortcuts ';
 
