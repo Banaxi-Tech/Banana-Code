@@ -50,9 +50,11 @@ While tools like Cursor provide great GUI experiences, Banana Code is built for 
 ## ✨ Key Features
 
 - **Multi-Provider Support**: Switch between **Google Gemini**, **Anthropic Claude**, **OpenAI** (API key or ChatGPT / Codex OAuth), **Mistral AI**, **OpenRouter** (any model ID; see [OpenRouter setup](#openrouter-setup)), **Ollama Cloud**, and **Ollama (Local)** effortlessly.
-- **Auto Mode**: For most providers, pick **Auto Mode** as your model — a small “router” model reads your prompt and chooses which model to use for that turn (with a short reason). Local Ollama and OpenRouter do not offer Auto Mode.
+- **Auto Mode**: For most providers, pick **Auto Mode** as your model — a small “router” model reads your prompt and chooses which model **and reasoning effort** to use for that turn.
+- **Interactive Terminal Suite**: Move beyond one-shot commands. The AI can now spawn persistent terminal sessions to handle interactive prompts like `npm init`, `git commit` (with editors), or Y/N confirmations in real-time.
+- **Financial Intelligence**: Track your exact API spend and savings. Banana Code uses server-side usage data to show you session costs and how much you've saved via **Prompt Caching**.
 - **Model Context Protocol (MCP)**: Connect Banana Code to any community-built MCP server (like SQLite, GitHub, Google Maps) to give your AI infinite new superpowers via `/beta`.
-- **Plan & Agent Modes**: Use `/agent` for normal execution, **`/plan`** for [Plan mode](#plan-mode), **`/ask`** for [Ask mode](#ask-mode) (read-only Q&A), or **`/security`** for [Security mode](#security-mode) (vulnerability-focused reviews).
+- **Modes**: Use `/agent` for normal execution, **`/plan`** for [Plan mode](#plan-mode), **`/ask`** for [Ask mode](#ask-mode), **`/security`** for [Security mode](#security-mode), or **`/skill-creator`** for [Skill Creator mode](#skill-creator-mode).
 - **Hierarchical Sub-Agents**: The main AI can spawn specialized "sub-agents" (Researchers, Coders, Reviewers) to handle complex tasks without polluting your main chat history.
 - **Self-Healing Loop**: If the AI runs a command (like running tests) and it fails, Banana Code automatically feeds the error trace back to the AI so it can fix its own code.
 - **Agent Skills**: Teach your AI specialized workflows. Drop a `SKILL.md` file in your config folder, and the AI will automatically activate it when relevant.
@@ -119,9 +121,12 @@ While in a chat, use these special commands (type `/help` for the full list):
 | `/skills` | List loaded Agent Skills from `~/.config/banana-code/skills/`. |
 | `/init` | Generate `BANANA.md` project summary in the current directory. |
 | `/permissions` | List permissions granted for this session. |
+| `/style` | Change AI writing style (Normal, Explanatory, Formal). |
+| `/effort` | Change Claude reasoning effort (low, medium, high, xhigh, max). |
 | `/debug` | Toggle debug output (e.g. tool results, auto-route diagnostics). |
 | `/plan` | Plan mode: AI outlines a plan before large edits. |
 | `/agent` | Default: AI applies changes directly. |
+| `/skill-creator` | Skill Creator mode: AI helps write custom Agent Skills. |
 | `/ask` | [Ask mode](#ask-mode): questions and explanations only; no project edits. |
 | `/security` | Security-focused review mode (defensive use only). |
 | `/yolo` | Auto-approve permission prompts (use with care). |
@@ -138,12 +143,13 @@ When **Auto Mode** is selected as the model (`/model` or initial setup), each ne
 [OpenRouter](https://openrouter.ai) lets you use many models behind one API. In Banana Code, choose **OpenRouter** in `/provider`, paste your OpenRouter API key, then enter a **model ID** (e.g. `org/model:free`). Banana Code loads OpenRouter’s public model list and checks that the model advertises tool support (`tools` / `tool_choice` in `supported_parameters`) so Banana’s tools can run. Routing uses the same OpenAI-compatible Chat Completions API at `https://openrouter.ai/api/v1`.
 
 ### 🎛️ Operating modes
-Banana Code layers **behavior modes** on top of the normal agent. Only one “style” mode is active at a time (`/plan`, `/ask`, `/security`, or default agent). The status bar shows **PLAN MODE**, **ASK MODE**, or **SECURITY MODE** when relevant.
+Banana Code layers **behavior modes** on top of the normal agent. Only one “style” mode is active at a time (`/plan`, `/ask`, `/security`, `/skill-creator`, or default agent). The status bar shows **PLAN MODE**, **ASK MODE**, or **SECURITY MODE** when relevant.
 
 | Command | Role |
 |--------|------|
 | **`/agent`** | Default: full coding agent with tools (subject to permissions). |
 | **`/plan`** | [Plan mode](#plan-mode) — propose a written plan before larger edits. |
+| **`/skill-creator`** | [Skill Creator mode](#skill-creator-mode) — expert prompt engineer to create custom Agent Skills. |
 | **`/ask`** | [Ask mode](#ask-mode) — read-only Q&A; no file or state-changing edits. |
 | **`/security`** | [Security mode](#security-mode) — prioritize vulnerability review. |
 | **`/yolo`** | Auto-approve permission prompts (dangerous; use carefully). |
@@ -185,17 +191,33 @@ Enable with **`/security`**. The system prompt switches to **Security Mode**: th
 
 Banana Code is for **defensive** work on software you own or are authorized to test. Do not use Security mode to probe systems without permission or to develop exploits. Return to normal coding with **`/agent`** when you’re done reviewing.
 
+### Skill Creator mode
+
+Enable with **`/skill-creator`**. The system prompt switches to **Skill Creator Mode**: the assistant acts as an expert Prompt Engineer to help you write custom "Agent Skills".
+
+**Behavior**
+
+- When you ask for a skill (e.g., "Make me a React Expert skill"), the AI will automatically generate a well-structured markdown file.
+- It saves this file directly into the skills directory (`~/.config/banana-code/skills/<skill-name>/SKILL.md`) using the required YAML frontmatter format.
+- The AI will ask clarifying questions if your request is too vague.
+
+Return to normal coding with **`/agent`** when you’re done creating skills.
+
 ### Available Tools
 Banana Code can assist you by:
-- **`execute_command`**: Running shell commands (git, npm, ls, etc.).
+- **`execute_command`**: Running one-shot shell commands (ls, mkdir, etc.).
+- **`execute_command_in_terminal`**: Starting a persistent, interactive terminal session (e.g. for `npm init`).
+- **`send_to_terminal`**: Sending input to an active terminal session (e.g. answering "Y" or a package name).
 - **`read_file`**: Reading local source code.
 - **`write_file`**: Creating or editing files.
-- **`patch_file`**: Targeted search-and-replace style edits (on by default; disable in `/settings`).
+- **`patch_file`**: Targeted search-and-replace style edits.
 - **`fetch_url`**: Browsing web documentation.
 - **`search_files`**: Performing regex searches across your project.
 - **`list_directory`**: Exploring folder structures.
+- **`get_banana_docs`**: Reading internal app documentation to answer user questions.
 
-Additional tools appear when you enable beta features in `/beta` (e.g. web search, MCP tools) or when the model exposes them.
+### 🐚 Interactive Terminal
+Version 2.0.0 introduces **Stateful Terminal Interaction**. When the AI runs a command that doesn't exit immediately (like a configuration wizard or a long-running dev server), it maintains a persistent session. The AI can then "see" the prompt from the terminal and send the appropriate response (e.g., typing a project name into `npm init` or answering `Y` to a deletion prompt).
 
 ### 🧠 Agent Skills
 Banana Code supports custom Agent Skills. Skills are like "onboarding guides" that teach the AI how to do specific tasks, use certain APIs, or follow your company's coding standards. 
@@ -252,8 +274,21 @@ Stop repeating yourself! When you start working in a new folder, type `/init`.
 
 Banana Code will analyze your entire project structure and generate a **`BANANA.md`** file. This file acts as a high-level architectural summary. Every time you start `banana` in that folder, the AI silently reads this file, giving it instant context about your project's goals and technologies from the very first message.
 
+### 💰 Financial Intelligence
+Banana Code 2.0.0 tracks your actual API expenditure. By using real usage data from providers (like Anthropic), it calculates exactly how much each turn costs. 
+
+- **Prompt Caching**: The app automatically utilizes Claude's Prompt Caching.
+- **View Savings**: Type **`/context`** to see your current session spend and how much money the cache has saved you (often up to 90%).
+- **Session Totals**: A final cost summary is printed whenever you exit the application.
+
 ## 📡 Headless API Mode (`--api`)
-Banana Code can be run as a background engine, exposing its powerful tool-calling and provider-switching logic via a local HTTP and WebSocket server. This allows you to build custom GUIs (Electron, Tauri, React) on top of the Banana Code engine without rewriting any AI logic.
+Banana Code can be run as a background engine, exposing its powerful tool-calling and provider-switching logic via a local HTTP and WebSocket server. This allows you to build custom GUIs (Electron, Tauri, React) on top of the Banana Code engine.
+
+### 🔐 API Security (Token Auth)
+Starting in v2.0.0, the API server is protected by a **Secure API Token**. 
+- A 32-character hex token is automatically generated on your first start.
+- You can find your token at `~/.config/banana-code/token.json`.
+- **All requests must include this token**, or they will be rejected with a `401 Unauthorized` error.
 
 Start the server:
 ```bash
@@ -261,12 +296,13 @@ banana --api 4000
 ```
 
 ### HTTP Endpoints
+Endpoints require the token passed via the `Authorization: Bearer <token>` header or as a `?token=<token>` query parameter.
 - `GET /api/status`: Returns engine status, active provider, and model.
 - `GET /api/sessions`: Returns a JSON array of all saved chat sessions.
 - `GET /api/config`: Returns the current `config.json` preferences.
 
 ### WebSocket Streaming & Chat
-Connect a WebSocket client (like `wscat` or your GUI frontend) to `ws://localhost:4000`.
+Connect a WebSocket client to `ws://localhost:4000?token=YOUR_TOKEN`.
 
 **Send a chat message:**
 ```json
@@ -274,27 +310,24 @@ Connect a WebSocket client (like `wscat` or your GUI frontend) to `ws://localhos
 ```
 
 **Streamed Response Format:**
-Banana Code streams data back to the client in real-time chunks:
-- `{"type": "chunk", "content": "The output of the command is..."}`
+...
 - `{"type": "tool_start", "tool": "execute_command"}`
 - `{"type": "done", "finalResponse": "..."}`
 
 ### Remote Tool Approval (Security)
-If the AI decides to run a shell command or patch a file, Banana Code pauses execution and sends a permission ticket to your GUI (single-line JSON messages):
-
+...
 ```json
 {"type":"permission_requested","ticketId":"5c9b2a...","action":"Execute Command","details":"sensors"}
 ```
-
-Your GUI must present a dialog to the user and respond with the same `ticketId` to resume execution:
-
+...
 ```json
 {"type":"permission_response","ticketId":"5c9b2a...","allowed":true,"session":true}
 ```
-
+...
 If an invalid `ticketId` is provided, Banana Code automatically blocks the tool execution to ensure safety.
 
 ## 🔐 Privacy & Security
+...
 
 Banana Code is built with transparency in mind:
 1. **Approval Required**: No file is written and no command is run without you saying "Allow".

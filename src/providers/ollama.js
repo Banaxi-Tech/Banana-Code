@@ -28,10 +28,29 @@ export class OllamaProvider {
         }
     }
 
-    async sendMessage(message) {
-        this.messages.push({ role: 'user', content: message });
+    async sendMessage(input) {
+        let message = '';
+        let images = [];
+        if (typeof input === 'string') {
+            message = input;
+        } else {
+            message = input.text;
+            images = input.images || [];
+        }
 
-        let spinner = ora({ text: 'Thinking...', color: 'yellow', stream: process.stdout }).start();
+        const userMessage = { 
+            role: 'user', 
+            content: message 
+        };
+        if (images.length > 0) {
+            userMessage.images = images.map(img => img.base64);
+        }
+        this.messages.push(userMessage);
+
+        let spinner = null;
+        if (!this.config.isApiMode) {
+            spinner = ora({ text: 'Thinking...', color: 'yellow', stream: process.stdout }).start();
+        }
         let finalResponse = '';
 
         try {
@@ -53,14 +72,14 @@ export class OllamaProvider {
                 }
 
                 const data = await response.json();
-                spinner.stop();
+                if (spinner) spinner.stop();
 
                 const messageObj = data.message;
 
                 if (messageObj.content) {
-                    if (this.config.useMarkedTerminal) {
+                    if (this.config.useMarkedTerminal && !this.config.isApiMode) {
                         printMarkdown(messageObj.content);
-                    } else {
+                    } else if (!this.config.isApiMode) {
                         process.stdout.write(chalk.cyan(messageObj.content));
                     }
                     finalResponse += messageObj.content;
@@ -69,7 +88,7 @@ export class OllamaProvider {
                 this.messages.push(messageObj);
 
                 if (!messageObj.tool_calls || messageObj.tool_calls.length === 0) {
-                    console.log();
+                    if (!this.config.isApiMode) console.log();
                     break;
                 }
 
@@ -78,16 +97,20 @@ export class OllamaProvider {
                     if (this.config.isApiMode && this.onToolStart) {
                         this.onToolStart(fn.name);
                     }
-                    console.log(chalk.yellow(`\n[Banana Calling Tool: ${fn.name}]`));
+                    if (!this.config.isApiMode) {
+                        console.log(chalk.yellow(`\n[Banana Calling Tool: ${fn.name}]`));
+                    }
 
                     let res = await executeTool(fn.name, fn.arguments, this.config);
                     if (this.config.isApiMode && this.onToolEnd) {
                         this.onToolEnd(res);
                     }
-                    if (this.config.debug) {
+                    if (this.config.debug && !this.config.isApiMode) {
                         console.log(chalk.gray(`[DEBUG] Tool Result: ${typeof res === 'string' ? res : JSON.stringify(res, null, 2)}`));
                     }
-                    console.log(chalk.yellow(`[Tool Result Received]\n`));
+                    if (!this.config.isApiMode) {
+                        console.log(chalk.yellow(`[Tool Result Received]\n`));
+                    }
 
                     this.messages.push({
                         role: 'tool',
@@ -96,13 +119,17 @@ export class OllamaProvider {
                     });
                 }
 
-                spinner = ora({ text: 'Processing tool results...', color: 'yellow', stream: process.stdout }).start();
+                if (!this.config.isApiMode) {
+                    spinner = ora({ text: 'Processing tool results...', color: 'yellow', stream: process.stdout }).start();
+                }
             }
 
             return finalResponse;
         } catch (err) {
-            spinner.stop();
-            console.error(chalk.red(`Ollama Error: ${err.message}`));
+            if (spinner) spinner.stop();
+            if (!this.config.isApiMode) {
+                console.error(chalk.red(`Ollama Error: ${err.message}`));
+            }
             return `Error: ${err.message}`;
         }
     }

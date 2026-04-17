@@ -68,7 +68,7 @@ export class OpenAIProvider {
                     store: false,
                     stream: true,
                     include: ["reasoning.encrypted_content"],
-                    reasoning: { effort: "low", summary: "concise" },
+                    reasoning: { effort: "medium", summary: "auto" },
                     text: { verbosity: "low" }
                 };
                 
@@ -152,36 +152,63 @@ export class OpenAIProvider {
         return { model: modelList[0].value, reason: 'Auto-routing failed, using most capable model.' };
     }
 
-    async sendMessage(message) {
+    async sendMessage(input) {
         if (this.config.authType === 'oauth') {
-            return await this.sendOauthMessage(message);
+            return await this.sendOauthMessage(input);
+        }
+
+        let message = '';
+        let images = [];
+        if (typeof input === 'string') {
+            message = input;
+        } else {
+            message = input.text;
+            images = input.images || [];
         }
 
         let activeModel = this.modelName;
         if (this.modelName === 'auto') {
             const routing = await this.autoRoute(message);
             activeModel = routing.model;
-            console.log(chalk.magenta(`\n[Auto Mode] → ${chalk.yellow(activeModel)}: ${routing.reason}`));
+            if (!this.config.isApiMode) {
+                console.log(chalk.magenta(`\n[Auto Mode] → ${chalk.yellow(activeModel)}: ${routing.reason}`));
+            }
         }
 
-        this.messages.push({ role: 'user', content: message });
+        const userContent = [{ type: 'text', text: message }];
+        for (const img of images) {
+            userContent.push({
+                type: 'image_url',
+                image_url: {
+                    url: `data:${img.mimeType};base64,${img.base64}`
+                }
+            });
+        }
+        this.messages.push({ role: 'user', content: userContent });
 
-        let spinner = ora({ text: 'Thinking...', color: 'yellow', stream: process.stdout }).start();
+        let spinner = null;
+        if (!this.config.isApiMode) {
+            spinner = ora({ text: 'Thinking...', color: 'yellow', stream: process.stdout }).start();
+        }
         let finalResponse = '';
 
         try {
             while (true) {
                 let stream = null;
                 try {
-                    stream = await this.openai.chat.completions.create({
+                    const params = {
                         model: activeModel,
                         messages: this.messages,
                         tools: this.tools,
                         stream: true
-                    });
+                    };
+
+                    stream = await this.openai.chat.completions.create(params);
                 } catch (e) {
-                    spinner.stop();
-                    console.error(chalk.red(`OpenAI Request Error: ${e.message}`));
+                    if (spinner) spinner.stop();
+                    if (!this.config.isApiMode) {
+                        console.error(chalk.red(`OpenAI Request Error: ${e.message}`));
+                    }
                     return `Error: ${e.message}`;
                 }
 
@@ -192,10 +219,10 @@ export class OpenAIProvider {
                     const delta = chunk.choices[0]?.delta;
 
                     if (delta?.content) {
-                        if (spinner.isSpinning && !this.config.useMarkedTerminal) spinner.stop();
+                        if (spinner && spinner.isSpinning && !this.config.useMarkedTerminal) spinner.stop();
                         if (!this.config.useMarkedTerminal) {
-                            if (this.config.isApiMode && this.onChunk) {
-                                this.onChunk(delta.content);
+                            if (this.config.isApiMode) {
+                                if (this.onChunk) this.onChunk(delta.content);
                             } else {
                                 process.stdout.write(chalk.cyan(delta.content));
                             }
@@ -205,7 +232,7 @@ export class OpenAIProvider {
                     }
 
                     if (delta?.tool_calls) {
-                        if (spinner.isSpinning) spinner.stop();
+                        if (spinner && spinner.isSpinning) spinner.stop();
                         for (const tc of delta.tool_calls) {
                             if (tc.index === undefined) continue;
                             if (!toolCalls[tc.index]) {
@@ -214,26 +241,28 @@ export class OpenAIProvider {
                             if (tc.function?.arguments) {
                                 toolCalls[tc.index].function.arguments += tc.function.arguments;
                                 // Visual feedback for streaming tool arguments
-                                if (!spinner.isSpinning) {
-                                    spinner = ora({ text: `Generating ${chalk.yellow(toolCalls[tc.index].function.name)} (${toolCalls[tc.index].function.arguments.length} bytes)...`, color: 'yellow', stream: process.stdout }).start();
-                                } else {
-                                    spinner.text = `Generating ${chalk.yellow(toolCalls[tc.index].function.name)} (${toolCalls[tc.index].function.arguments.length} bytes)...`;
+                                if (!this.config.isApiMode) {
+                                    if (!spinner || !spinner.isSpinning) {
+                                        spinner = ora({ text: `Generating ${chalk.yellow(toolCalls[tc.index].function.name)} (${toolCalls[tc.index].function.arguments.length} bytes)...`, color: 'yellow', stream: process.stdout }).start();
+                                    } else {
+                                        spinner.text = `Generating ${chalk.yellow(toolCalls[tc.index].function.name)} (${toolCalls[tc.index].function.arguments.length} bytes)...`;
+                                    }
                                 }
                             }
                         }
                     }
                 }
-                if (spinner.isSpinning) spinner.stop();
+                if (spinner && spinner.isSpinning) spinner.stop();
 
                 if (chunkResponse) {
-                    if (this.config.useMarkedTerminal) printMarkdown(chunkResponse);
+                    if (this.config.useMarkedTerminal && !this.config.isApiMode) printMarkdown(chunkResponse);
                     this.messages.push({ role: 'assistant', content: chunkResponse });
                 }
 
                 toolCalls = toolCalls.filter(Boolean);
 
                 if (toolCalls.length === 0) {
-                    console.log();
+                    if (!this.config.isApiMode) console.log();
                     break;
                 }
 
@@ -247,7 +276,9 @@ export class OpenAIProvider {
                     if (this.config.isApiMode && this.onToolStart) {
                         this.onToolStart(call.function.name);
                     }
-                    console.log(chalk.yellow(`\n[Banana Calling Tool: ${call.function.name}]`));
+                    if (!this.config.isApiMode) {
+                        console.log(chalk.yellow(`\n[Banana Calling Tool: ${call.function.name}]`));
+                    }
                     let args = {};
                     try {
                         args = JSON.parse(call.function.arguments);
@@ -257,10 +288,12 @@ export class OpenAIProvider {
                     if (this.config.isApiMode && this.onToolEnd) {
                         this.onToolEnd(res);
                     }
-                    if (this.config.debug) {
+                    if (this.config.debug && !this.config.isApiMode) {
                         console.log(chalk.gray(`[DEBUG] Tool Result: ${typeof res === 'string' ? res : JSON.stringify(res, null, 2)}`));
                     }
-                    console.log(chalk.yellow(`[Tool Result Received]\n`));
+                    if (!this.config.isApiMode) {
+                        console.log(chalk.yellow(`[Tool Result Received]\n`));
+                    }
 
                     this.messages.push({
                         role: 'tool',
@@ -269,26 +302,41 @@ export class OpenAIProvider {
                     });
                 }
 
-                spinner = ora({ text: 'Processing tool results...', color: 'yellow', stream: process.stdout }).start();
+                if (!this.config.isApiMode) {
+                    spinner = ora({ text: 'Processing tool results...', color: 'yellow', stream: process.stdout }).start();
+                }
             }
 
             return finalResponse;
         } catch (err) {
             if (spinner && spinner.isSpinning) spinner.stop();
-            console.error(chalk.red(`OpenAI Runtime Error: ${err.message}`));
+            if (!this.config.isApiMode) {
+                console.error(chalk.red(`OpenAI Runtime Error: ${err.message}`));
+            }
             return `Error: ${err.message}`;
         }
     }
 
-    async sendOauthMessage(message) {
+    async sendOauthMessage(input) {
+        let message = '';
+        let images = [];
+        if (typeof input === 'string') {
+            message = input;
+        } else {
+            message = input.text;
+            images = input.images || [];
+        }
+
         let activeOauthModel = this.modelName;
         if (this.modelName === 'auto') {
             const routing = await this.autoRoute(message);
             activeOauthModel = routing.model;
-            console.log(chalk.magenta(`\n[Auto Mode] → ${chalk.yellow(activeOauthModel)}: ${routing.reason}`));
+            if (!this.config.isApiMode) {
+                console.log(chalk.magenta(`\n[Auto Mode] → ${chalk.yellow(activeOauthModel)}: ${routing.reason}`));
+            }
         }
 
-        this.messages.push({ role: 'user', content: message });
+        this.messages.push({ role: 'user', content: message, attachedImages: images });
 
         const authFile = path.join(os.homedir(), '.codex', 'auth.json');
         let accessToken, accountId;
@@ -299,7 +347,9 @@ export class OpenAIProvider {
             accountId = session?.tokens?.account_id || session.account_id;
             if (!accessToken || !accountId) throw new Error("Token or Account ID missing");
         } catch (e) {
-            console.error(chalk.red("\nCodex auth token not found. Please quit 'banana', delete ~/.config/banana-code/config.json, and run setup again."));
+            if (!this.config.isApiMode) {
+                console.error(chalk.red("\nCodex auth token not found. Please quit 'banana', delete ~/.config/banana-code/config.json, and run setup again."));
+            }
             return "Error: Codex auth token not found.";
         }
 
@@ -321,11 +371,29 @@ export class OpenAIProvider {
                             });
                         }
                     } else if (msg.content) {
-                        const contentType = msg.role === 'assistant' ? 'output_text' : 'input_text';
+                        const contentParts = [];
+                        if (typeof msg.content === 'string') {
+                            const contentType = msg.role === 'assistant' ? 'output_text' : 'input_text';
+                            contentParts.push({ type: contentType, text: msg.content });
+                        } else if (Array.isArray(msg.content)) {
+                            // Copy existing structured content parts
+                            contentParts.push(...msg.content);
+                        }
+
+                        // Also include any images explicitly attached to this message object
+                        if (msg.attachedImages) {
+                            for (const img of msg.attachedImages) {
+                                contentParts.push({
+                                    type: 'image',
+                                    image_url: `data:${img.mimeType};base64,${img.base64}`
+                                });
+                            }
+                        }
+
                         result.push({
                             type: 'message',
                             role: msg.role,
-                            content: [{ type: contentType, text: msg.content }]
+                            content: contentParts
                         });
                     }
                 } else if (msg.role === 'tool') {
@@ -351,7 +419,10 @@ export class OpenAIProvider {
             });
         };
 
-        let spinner = ora({ text: 'Thinking...', color: 'yellow', stream: process.stdout }).start();
+        let spinner = null;
+        if (!this.config.isApiMode) {
+            spinner = ora({ text: 'Thinking...', color: 'yellow', stream: process.stdout }).start();
+        }
         let finalResponse = '';
 
         try {
@@ -362,7 +433,7 @@ export class OpenAIProvider {
                 const payload = {
                     model: activeOauthModel || 'gpt-5.2',
                     instructions: this.systemPrompt,
-                    input: backendInput,
+                    input: backendInput.length > 0 ? backendInput : [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: ' ' }] }],
                     tools: backendTools,
                     store: false,
                     stream: true,
@@ -386,7 +457,7 @@ export class OpenAIProvider {
 
                 if (!response.ok) {
                     const errorText = await response.text();
-                    spinner.stop();
+                    if (spinner) spinner.stop();
                     throw new Error(`HTTP ${response.status}: ${errorText}`);
                 }
 
@@ -398,6 +469,7 @@ export class OpenAIProvider {
                 let currentEvent = '';
                 let currentDataBuffer = '';
                 let lineBuffer = '';
+                let hasFinishedReasoning = false;
 
                 while (true) {
                     const { value, done } = await reader.read();
@@ -416,12 +488,14 @@ export class OpenAIProvider {
                                     if (currentEvent === 'response.output_text.delta') {
                                         if (spinner && spinner.isSpinning && !this.config.useMarkedTerminal) spinner.stop();
                                         if (!this.config.useMarkedTerminal) {
-                                            process.stdout.write(chalk.cyan(data.delta));
+                                            if (!this.config.isApiMode) {
+                                                process.stdout.write(chalk.cyan(data.delta));
+                                            }
                                         }
                                         currentChunkResponse += data.delta;
                                         finalResponse += data.delta;
                                     } else if (currentEvent === 'response.reasoning.delta' || currentEvent === 'response.reasoning_text.delta' || currentEvent.includes('reasoning.delta')) {
-                                        if (this.config.debug && data.delta) {
+                                        if (this.config.debug && !this.config.isApiMode && data.delta) {
                                             if (spinner && spinner.isSpinning) spinner.stop();
                                             process.stdout.write(chalk.gray(data.delta));
                                         }
@@ -435,10 +509,12 @@ export class OpenAIProvider {
                                     } else if (currentEvent === 'response.function_call_arguments.delta' && currentToolCall) {
                                         currentToolCall.arguments += data.delta;
                                         // Visual feedback for streaming tool arguments
-                                        if (!spinner.isSpinning) {
-                                            spinner = ora({ text: `Generating ${chalk.yellow(currentToolCall.name)} (${currentToolCall.arguments.length} bytes)...`, color: 'yellow', stream: process.stdout }).start();
-                                        } else {
-                                            spinner.text = `Generating ${chalk.yellow(currentToolCall.name)} arguments (${currentToolCall.arguments.length} bytes)...`;
+                                        if (!this.config.isApiMode) {
+                                            if (!spinner || !spinner.isSpinning) {
+                                                spinner = ora({ text: `Generating ${chalk.yellow(currentToolCall.name)} (${currentToolCall.arguments.length} bytes)...`, color: 'yellow', stream: process.stdout }).start();
+                                            } else {
+                                                spinner.text = `Generating ${chalk.yellow(currentToolCall.name)} arguments (${currentToolCall.arguments.length} bytes)...`;
+                                            }
                                         }
                                     } else if (currentEvent === 'response.output_item.done' && data.item?.type === 'function_call' && currentToolCall) {
                                         if (spinner && spinner.isSpinning) spinner.stop();
@@ -479,8 +555,10 @@ export class OpenAIProvider {
                         try {
                             const data = JSON.parse(currentDataBuffer);
                             if (currentEvent === 'response.output_text.delta') {
-                                if (spinner.isSpinning) spinner.stop();
-                                process.stdout.write(chalk.cyan(data.delta));
+                                if (spinner && spinner.isSpinning) spinner.stop();
+                                if (!this.config.isApiMode) {
+                                    process.stdout.write(chalk.cyan(data.delta));
+                                }
                                 currentChunkResponse += data.delta;
                                 finalResponse += data.delta;
                             }
@@ -488,15 +566,15 @@ export class OpenAIProvider {
                     }
                 }
                 // Also stop spinner at the very end of the stream just in case
-                if (spinner.isSpinning) spinner.stop();
+                if (spinner && spinner.isSpinning) spinner.stop();
 
                 if (currentChunkResponse) {
-                    if (this.config.useMarkedTerminal) printMarkdown(currentChunkResponse);
+                    if (this.config.useMarkedTerminal && !this.config.isApiMode) printMarkdown(currentChunkResponse);
                     this.messages.push({ role: 'assistant', content: currentChunkResponse });
                 }
 
                 if (activeToolCalls.length === 0) {
-                    console.log();
+                    if (!this.config.isApiMode) console.log();
                     break;
                 }
 
@@ -510,7 +588,9 @@ export class OpenAIProvider {
                     if (this.config.isApiMode && this.onToolStart) {
                         this.onToolStart(call.function.name);
                     }
-                    console.log(chalk.yellow(`\n[Banana Calling Tool: ${call.function.name}]`));
+                    if (!this.config.isApiMode) {
+                        console.log(chalk.yellow(`\n[Banana Calling Tool: ${call.function.name}]`));
+                    }
                     let args = {};
                     try {
                         args = JSON.parse(call.function.arguments);
@@ -520,10 +600,12 @@ export class OpenAIProvider {
                     if (this.config.isApiMode && this.onToolEnd) {
                         this.onToolEnd(res);
                     }
-                    if (this.config.debug) {
+                    if (this.config.debug && !this.config.isApiMode) {
                         console.log(chalk.gray(`[DEBUG] Tool Result: ${typeof res === 'string' ? res : JSON.stringify(res, null, 2)}`));
                     }
-                    console.log(chalk.yellow(`[Tool Result Received]\n`));
+                    if (!this.config.isApiMode) {
+                        console.log(chalk.yellow(`[Tool Result Received]\n`));
+                    }
 
                     this.messages.push({
                         role: 'tool',
@@ -532,14 +614,18 @@ export class OpenAIProvider {
                     });
                 }
 
-                spinner = ora({ text: 'Processing tool results...', color: 'yellow', stream: process.stdout }).start();
+                if (!this.config.isApiMode) {
+                    spinner = ora({ text: 'Processing tool results...', color: 'yellow', stream: process.stdout }).start();
+                }
             }
 
             return finalResponse;
 
         } catch (err) {
             if (spinner && spinner.isSpinning) spinner.stop();
-            console.error(chalk.red(`OpenAI Codex Error: ${err.message}`));
+            if (!this.config.isApiMode) {
+                console.error(chalk.red(`OpenAI Codex Error: ${err.message}`));
+            }
             return `Error: ${err.message}`;
         }
     }

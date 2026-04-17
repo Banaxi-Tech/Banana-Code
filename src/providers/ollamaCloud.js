@@ -59,17 +59,38 @@ export class OllamaCloudProvider {
         return { model: OLLAMA_CLOUD_MODELS[0].value, reason: 'Auto-routing failed, using most capable model.' };
     }
 
-    async sendMessage(message) {
+    async sendMessage(input) {
+        let message = '';
+        let images = [];
+        if (typeof input === 'string') {
+            message = input;
+        } else {
+            message = input.text;
+            images = input.images || [];
+        }
+
         let activeModel = this.modelName;
         if (this.modelName === 'auto') {
             const routing = await this.autoRoute(message);
             activeModel = routing.model;
-            console.log(chalk.magenta(`\n[Auto Mode] → ${chalk.yellow(activeModel)}: ${routing.reason}`));
+            if (!this.config.isApiMode) {
+                console.log(chalk.magenta(`\n[Auto Mode] → ${chalk.yellow(activeModel)}: ${routing.reason}`));
+            }
         }
 
-        this.messages.push({ role: 'user', content: message });
+        const userMessage = { 
+            role: 'user', 
+            content: message 
+        };
+        if (images.length > 0) {
+            userMessage.images = images.map(img => img.base64);
+        }
+        this.messages.push(userMessage);
 
-        let spinner = ora({ text: 'Thinking (Cloud)...', color: 'yellow', stream: process.stdout }).start();
+        let spinner = null;
+        if (!this.config.isApiMode) {
+            spinner = ora({ text: 'Thinking (Cloud)...', color: 'yellow', stream: process.stdout }).start();
+        }
         let finalResponse = '';
 
         try {
@@ -90,7 +111,7 @@ export class OllamaCloudProvider {
 
                 if (!response.ok) {
                     const errorText = await response.text();
-                    spinner.stop();
+                    if (spinner) spinner.stop();
                     throw new Error(`HTTP ${response.status}: ${errorText}`);
                 }
 
@@ -119,11 +140,11 @@ export class OllamaCloudProvider {
                                 }
                                 if (data.message.content) {
                                     const content = data.message.content;
-                                    if (spinner.isSpinning && !this.config.useMarkedTerminal) spinner.stop();
+                                    if (spinner && spinner.isSpinning && !this.config.useMarkedTerminal) spinner.stop();
                                     if (!this.config.useMarkedTerminal) {
                                         if (this.config.isApiMode && this.onChunk) {
                                             this.onChunk(content);
-                                        } else {
+                                        } else if (!this.config.isApiMode) {
                                             process.stdout.write(chalk.cyan(content));
                                         }
                                     }
@@ -144,9 +165,13 @@ export class OllamaCloudProvider {
                             }
                             if (data.message.content) {
                                 const content = data.message.content;
-                                if (spinner.isSpinning && !this.config.useMarkedTerminal) spinner.stop();
+                                if (spinner && spinner.isSpinning && !this.config.useMarkedTerminal) spinner.stop();
                                 if (!this.config.useMarkedTerminal) {
-                                    process.stdout.write(chalk.cyan(content));
+                                    if (this.config.isApiMode && this.onChunk) {
+                                        this.onChunk(content);
+                                    } else if (!this.config.isApiMode) {
+                                        process.stdout.write(chalk.cyan(content));
+                                    }
                                 }
                                 currentChunkResponse += content;
                                 finalResponse += content;
@@ -155,9 +180,9 @@ export class OllamaCloudProvider {
                     } catch (e) { }
                 }
 
-                if (spinner.isSpinning) spinner.stop();
+                if (spinner && spinner.isSpinning) spinner.stop();
 
-                if (currentChunkResponse && this.config.useMarkedTerminal) {
+                if (currentChunkResponse && this.config.useMarkedTerminal && !this.config.isApiMode) {
                     printMarkdown(currentChunkResponse);
                 }
 
@@ -165,7 +190,7 @@ export class OllamaCloudProvider {
                 this.messages.push(lastMessageObj);
 
                 if (!lastMessageObj.tool_calls || lastMessageObj.tool_calls.length === 0) {
-                    console.log();
+                    if (!this.config.isApiMode) console.log();
                     break;
                 }
 
@@ -174,16 +199,20 @@ export class OllamaCloudProvider {
                     if (this.config.isApiMode && this.onToolStart) {
                         this.onToolStart(fn.name);
                     }
-                    console.log(chalk.yellow(`\n[Banana Calling Tool: ${fn.name}]`));
+                    if (!this.config.isApiMode) {
+                        console.log(chalk.yellow(`\n[Banana Calling Tool: ${fn.name}]`));
+                    }
 
                     let res = await executeTool(fn.name, fn.arguments, this.config);
                     if (this.config.isApiMode && this.onToolEnd) {
                         this.onToolEnd(res);
                     }
-                    if (this.config.debug) {
+                    if (this.config.debug && !this.config.isApiMode) {
                         console.log(chalk.gray(`[DEBUG] Tool Result: ${typeof res === 'string' ? res : JSON.stringify(res, null, 2)}`));
                     }
-                    console.log(chalk.yellow(`[Tool Result Received]\n`));
+                    if (!this.config.isApiMode) {
+                        console.log(chalk.yellow(`[Tool Result Received]\n`));
+                    }
 
                     this.messages.push({
                         role: 'tool',
@@ -192,13 +221,17 @@ export class OllamaCloudProvider {
                     });
                 }
 
-                spinner = ora({ text: 'Processing tool results...', color: 'yellow', stream: process.stdout }).start();
+                if (!this.config.isApiMode) {
+                    spinner = ora({ text: 'Processing tool results...', color: 'yellow', stream: process.stdout }).start();
+                }
             }
 
             return finalResponse;
         } catch (err) {
-            if (spinner.isSpinning) spinner.stop();
-            console.error(chalk.red(`Ollama Cloud Error: ${err.message}`));
+            if (spinner && spinner.isSpinning) spinner.stop();
+            if (!this.config.isApiMode) {
+                console.error(chalk.red(`Ollama Cloud Error: ${err.message}`));
+            }
             return `Error: ${err.message}`;
         }
     }

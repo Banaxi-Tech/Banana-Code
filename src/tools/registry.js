@@ -1,4 +1,6 @@
 import { execCommand } from './execCommand.js';
+import { executeCommandInTerminal, sendToTerminal, terminateTerminalSession } from './terminal.js';
+import { getBananaDocs } from './getBananaDocs.js';
 import { readFile } from './readFile.js';
 import { readManyFiles } from './readManyFiles.js';
 import { writeFile } from './writeFile.js';
@@ -24,6 +26,49 @@ export const TOOLS = [
                 cwd: { type: 'string', description: 'The directory to run in (optional)' }
             },
             required: ['command']
+        }
+    },
+    {
+        name: 'execute_command_in_terminal',
+        description: 'Execute a command in an interactive terminal session. Useful for commands that require input (like Y/N or package init). Returns a sessionId if the process stays open.',
+        parameters: {
+            type: 'object',
+            properties: {
+                command: { type: 'string', description: 'The command to run' },
+                cwd: { type: 'string', description: 'The directory to run in (optional)' }
+            },
+            required: ['command']
+        }
+    },
+    {
+        name: 'send_to_terminal',
+        description: 'Send input to an active terminal session. Useful for responding to interactive prompts like Y/N. IMPORTANT: You must include "\\n" for Enter.',
+        parameters: {
+            type: 'object',
+            properties: {
+                sessionId: { type: 'string', description: 'The session ID returned by execute_command_in_terminal' },
+                input: { type: 'string', description: 'The text to send to stdin (e.g., "Y\\n")' }
+            },
+            required: ['sessionId', 'input']
+        }
+    },
+    {
+        name: 'terminate_terminal_session',
+        description: 'Terminate an active terminal session and cleanup resources.',
+        parameters: {
+            type: 'object',
+            properties: {
+                sessionId: { type: 'string', description: 'The session ID to terminate' }
+            },
+            required: ['sessionId']
+        }
+    },
+    {
+        name: 'get_banana_docs',
+        description: 'Retrieve the official documentation for Banana Code. Use this to answer user questions about app features, slash commands, or setup.',
+        parameters: {
+            type: 'object',
+            properties: {}
         }
     },
     {
@@ -293,6 +338,10 @@ export async function executeTool(name, args, config) {
 
     switch (name) {
         case 'execute_command': return await execCommand(args);
+        case 'execute_command_in_terminal': return await executeCommandInTerminal(args);
+        case 'send_to_terminal': return await sendToTerminal(args);
+        case 'terminate_terminal_session': return await terminateTerminalSession(args);
+        case 'get_banana_docs': return await getBananaDocs(args);
         case 'read_file': return await readFile(args);
         case 'read_many_files': return await readManyFiles(args);
         case 'write_file': return await writeFile(args);

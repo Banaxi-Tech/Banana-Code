@@ -9,7 +9,8 @@ export const AUTO_MODEL_DESCRIPTIONS = {
     'gpt-5.2-codex':        'Solid coding model. Good for most programming tasks.',
     'gpt-5.2':              'General purpose GPT-5.2. Good balance of capability and speed. Cheapest OAuth option.',
     // Claude
-    'claude-opus-4-6':      'Most powerful Claude (2026). Best for complex analysis, long documents, nuanced reasoning, hard bugs. Recommended For Extremely Complex Tasks like writing something from scratch.',
+    'claude-opus-4-7':      'Anthropic flagship (April 2026). Ultimate intelligence, deepest reasoning (xhigh/max effort). Best for frontier-level architectural design and extremely complex bugs.',
+    'claude-opus-4-6':      'Highly capable previous flagship. Excellent for complex analysis, long documents, and hard bugs where Opus 4.7 might be overkill.',
     'claude-sonnet-4-6':    'Fast and smart Claude (2026). Best balance of speed and quality for most tasks. Recommended For Most Tasks',
     'claude-haiku-4-5':     'Fastest, cheapest Claude. Ideal for simple tasks, quick lookups, high-volume requests.',
     // Gemini
@@ -135,8 +136,9 @@ export function geminiMessagesToAutoRouterHistory(messages, max = AUTO_ROUTER_HI
  * @param {Array<{id: string, description: string}>} models
  * @param {string} currentUserMessage — the new user line only (what we need a model for)
  * @param {string} [historyText] — formatted prior turns (optional)
+ * @param {string} provider — the current provider (e.g. 'claude')
  */
-export function buildRoutingPrompt(models, currentUserMessage, historyText = '') {
+export function buildRoutingPrompt(models, currentUserMessage, historyText = '', provider = '') {
     const modelList = models
         .map(({ id, description }) => `- ${id}: ${description}`)
         .join('\n');
@@ -150,6 +152,18 @@ ${historyText.trim()}
 `
         : '';
 
+    let effortInstructions = '';
+    if (provider === 'claude') {
+        effortInstructions = `
+Additionally, you must select a reasoning "effort" level for the chosen model based on the task difficulty:
+- "low": Simple questions, quick fixes, basic file lookups, or greetings.
+- "medium": Standard coding tasks, standard bug fixes, or explanatory responses.
+- "high": Complex logic, multi-file changes, architectural design, or difficult bugs.
+- "xhigh": Frontier-level architectural problems or extremely deep reasoning (Only for 'claude-opus-4-7').
+- "max": Absolute maximum reasoning depth for the most impossible problems (Only for 'opus' and 'sonnet' series).
+`;
+    }
+
     return `You are a model router for an AI coding assistant called Banana Code. You must choose exactly ONE model from the list below.
 
 CRITICAL RULES:
@@ -162,14 +176,14 @@ Guidelines for which model fits the CURRENT user message:
 - Complex reasoning, architecture, hard debugging, large refactors, full feature implementation → most capable models
 - Code-heavy work → coding-focused models when listed
 - Default to the cheapest model that can adequately handle the current message (use history to disambiguate difficulty)
-
+${effortInstructions}
 Available models (pick by exact "id"):
 ${modelList}
 ${historyBlock}
 Current user message (choose model for THIS message only — the assistant's next reply will use your chosen model):
 ${currentUserMessage}
 
-Respond ONLY with valid JSON and nothing else: {"model": "<exact_model_id_from_the_list>", "reason": "<one brief sentence: why this model fits the current message, using history only as context>"}`;
+Respond ONLY with valid JSON and nothing else: {"model": "<exact_model_id_from_the_list>", "effort": "<level_choice>", "reason": "<one brief sentence: why this model and effort fits the current message, using history only as context>"}`;
 }
 
 export function parseRoutingResponse(text) {
@@ -178,7 +192,11 @@ export function parseRoutingResponse(text) {
         if (match) {
             const parsed = JSON.parse(match[0]);
             if (typeof parsed.model === 'string' && typeof parsed.reason === 'string') {
-                return parsed;
+                return {
+                    model: parsed.model,
+                    effort: parsed.effort || 'high',
+                    reason: parsed.reason
+                };
             }
         }
     } catch (e) {}

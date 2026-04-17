@@ -4,6 +4,7 @@ import ora from 'ora';
 import { loadConfig, saveConfig, setupProvider } from './config.js';
 import { runStartup } from './startup.js';
 import { getSessionPermissions, setYoloMode } from './permissions.js';
+import { cleanupTerminalSessions } from './tools/terminal.js';
 
 import { GeminiProvider } from './providers/gemini.js';
 import { ClaudeProvider } from './providers/claude.js';
@@ -14,6 +15,7 @@ import { MistralProvider } from './providers/mistral.js';
 import { OpenRouterProvider } from './providers/openrouter.js';
 
 import { loadSession, saveSession, generateSessionId, getLatestSessionId, listSessions } from './sessions.js';
+import { getSystemPrompt } from './prompt.js';
 import { printMarkdown } from './utils/markdown.js';
 import { estimateConversationTokens } from './utils/tokens.js';
 import { mcpManager } from './utils/mcp.js';
@@ -238,23 +240,39 @@ async function handleSlashCommand(command) {
             }
             break;
         case '/context':
-            let length = 0;
             let messagesForEstimation = [];
-            
+
             if (providerInstance.messages) {
-                length = providerInstance.messages.length;
                 messagesForEstimation = providerInstance.messages;
             } else if (providerInstance.chat) {
                 messagesForEstimation = await providerInstance.chat.getHistory();
-                length = messagesForEstimation.length;
             }
-            
-            const { estimateConversationTokens } = await import('./utils/tokens.js');
-            const estimatedTokens = estimateConversationTokens(messagesForEstimation);
-            
-            console.log(chalk.cyan(`Current context:`));
-            console.log(chalk.cyan(`- Messages: ${length}`));
-            console.log(chalk.cyan(`- Estimated Tokens: ~${estimatedTokens.toLocaleString()}`));
+
+            const { getContextBreakdown } = await import('./utils/tokens.js');
+            const breakdown = getContextBreakdown(messagesForEstimation);
+
+            console.log(chalk.cyan.bold(`\nContext Breakdown:`));
+            console.log(chalk.cyan(`- Total Messages:   ${messagesForEstimation.length}`));
+            console.log(chalk.cyan(`- Estimated Tokens: ~${breakdown.total.toLocaleString()}\n`));
+
+            console.log(chalk.yellow.bold(`Usage by Category:`));
+            console.log(chalk.gray(`  System Prompt: `) + chalk.green(`${breakdown.system.toLocaleString()} tokens `) + chalk.blue(`(${breakdown.percentages.system}%)`));
+            console.log(chalk.gray(`  Chat History:  `) + chalk.green(`${breakdown.chat.toLocaleString()} tokens `) + chalk.blue(`(${breakdown.percentages.chat}%)`));
+            console.log(chalk.gray(`  Tool Usage:    `) + chalk.green(`${breakdown.tools.toLocaleString()} tokens `) + chalk.blue(`(${breakdown.percentages.tools}%)`));
+            if (breakdown.other > 0) {
+                console.log(chalk.gray(`  Other Data:    `) + chalk.green(`${breakdown.other.toLocaleString()} tokens `) + chalk.blue(`(${breakdown.percentages.other}%)`));
+            }
+
+            // Real cost calculation from provider (if supported)
+            if (providerInstance && typeof providerInstance.calculateSessionCost === 'function') {
+                const { cost, savings } = providerInstance.calculateSessionCost();
+                console.log(chalk.yellow.bold(`\nFinancial Summary:`));
+                console.log(chalk.green(`  Session Cost:   $${cost}`));
+                if (parseFloat(savings) > 0) {
+                    console.log(chalk.cyan(`  Total Savings:  $${savings} (via Prompt Caching) 🍌`));
+                }
+            }
+            console.log();
             break;
         case '/permissions':
             const perms = getSessionPermissions();
@@ -333,7 +351,7 @@ async function handleSlashCommand(command) {
             console.log(chalk.green(`Beta tools updated: ${enabledBetaTools.join(', ') || 'none'}`));
             break;
         case '/settings':
-            const { checkbox: settingsCheckbox } = await import('@inquirer/prompts');
+            const { checkbox: settingsCheckbox, confirm: settingsConfirm } = await import('@inquirer/prompts');
             const enabledSettings = await settingsCheckbox({
                 message: 'Select features to enable (Space to toggle, Enter to confirm):',
                 choices: [
@@ -361,15 +379,37 @@ async function handleSlashCommand(command) {
                         name: 'Enable Global AI Memory (Allows AI to save facts persistently)',
                         value: 'useMemory',
                         checked: config.useMemory !== false
+                    },
+                    {
+                        name: 'Enable UltraMemory (Scans chats in background, HIGH API USAGE)',
+                        value: 'useUltraMemory',
+                        checked: config.useUltraMemory || false
                     }
                 ]
             });
-            
+
+            if (enabledSettings.includes('useUltraMemory') && !config.useUltraMemory) {
+                console.log(chalk.red.bold('\n⚠️  WARNING: UltraMemory will scan your chats in the background using AI.'));
+                console.log(chalk.yellow('This can SIGNIFICANTLY increase your API quota usage and costs.'));
+                console.log(chalk.yellow('It will only scan chats created or updated AFTER this feature is enabled.'));
+
+                const agreed = await settingsConfirm({ message: 'Are you sure you want to enable UltraMemory?' });
+                if (!agreed) {
+                    const idx = enabledSettings.indexOf('useUltraMemory');
+                    if (idx > -1) enabledSettings.splice(idx, 1);
+                    console.log(chalk.yellow('UltraMemory was not enabled.'));
+                } else {
+                    config.ultraMemoryEnabledAt = new Date().toISOString();
+                }
+            }
+
             config.autoFeedWorkspace = enabledSettings.includes('autoFeedWorkspace');
             config.useMarkedTerminal = enabledSettings.includes('useMarkedTerminal');
             config.usePatchFile = enabledSettings.includes('usePatchFile');
             config.showTokenCount = enabledSettings.includes('showTokenCount');
             config.useMemory = enabledSettings.includes('useMemory');
+            config.useUltraMemory = enabledSettings.includes('useUltraMemory');
+
             await saveConfig(config);
             if (providerInstance) {
                 const savedMessages = providerInstance.messages;
@@ -378,6 +418,12 @@ async function handleSlashCommand(command) {
             } else {
                 providerInstance = createProvider();
             }
+
+            if (config.useUltraMemory) {
+                const { runUltraMemoryBackground } = await import('./utils/ultraMemory.js');
+                runUltraMemoryBackground(config, createProvider);
+            }
+
             console.log(chalk.green(`Settings updated.`));
             break;
         case '/debug':
@@ -412,6 +458,7 @@ async function handleSlashCommand(command) {
             config.planMode = true;
             config.askMode = false;
             config.securityMode = false;
+            config.skillCreatorMode = false;
             await saveConfig(config);
             if (providerInstance) {
                 const savedMessages = providerInstance.messages;
@@ -464,7 +511,76 @@ async function handleSlashCommand(command) {
             }
             console.log(config.yolo ? chalk.bgRed.white.bold('\n ⚠️ YOLO MODE ENABLED - All permission requests will be auto-accepted! \n') : chalk.green('\nYOLO mode disabled.\n'));
             break;
-        case '/agent':
+        case '/style': {
+            const { select: styleSelect } = await import('@inquirer/prompts');
+            const selectedStyle = await styleSelect({
+                message: 'Select a writing style for the AI:',
+                choices: [
+                    { name: 'Normal (Default)', value: 'normal' },
+                    { name: 'Explanatory (Detailed & Educational)', value: 'explanatory' },
+                    { name: 'Formal (Professional & Academic)', value: 'formal' }
+                ],
+                default: config.style || 'normal'
+            });
+
+            config.style = selectedStyle;
+            await saveConfig(config);
+            if (providerInstance) {
+                const savedMessages = providerInstance.messages;
+                providerInstance = createProvider();
+                providerInstance.messages = savedMessages;
+                
+                // Ensure the system prompt is updated in the message history if applicable
+                const newSysPrompt = getSystemPrompt(config);
+                if (typeof providerInstance.updateSystemPrompt === 'function') {
+                    providerInstance.updateSystemPrompt(newSysPrompt);
+                }
+            } else {
+                providerInstance = createProvider();
+            }
+            console.log(chalk.green(`AI style updated to: ${selectedStyle.charAt(0).toUpperCase() + selectedStyle.slice(1)}`));
+            break;
+        }
+        case '/effort': {
+            if (config.provider !== 'claude') {
+                console.log(chalk.yellow("The /effort command is currently only supported for Claude models."));
+                break;
+            }
+            const { select: effortSelect } = await import('@inquirer/prompts');
+            
+            const currentModel = providerInstance ? providerInstance.modelName : (config.model || '');
+            const isAdvancedModel = currentModel.includes('opus-4') || currentModel.includes('sonnet-4');
+            const isOpus47 = currentModel.includes('opus-4-7');
+
+            const choices = [
+                { name: 'Low (Fast, cheap, simple tasks)', value: 'low' },
+                { name: 'Medium (Balanced)', value: 'medium' },
+                { name: 'High (Standard, full capability)', value: 'high' }
+            ];
+
+            if (isAdvancedModel) {
+                if (isOpus47) {
+                    choices.push({ name: 'Extra-High (Deep reasoning, best for Opus 4.7)', value: 'xhigh' });
+                }
+                choices.push({ name: 'Max (No constraints, absolute maximum depth)', value: 'max' });
+            }
+
+            const selectedEffort = await effortSelect({
+                message: `Select reasoning effort for ${currentModel}:`,
+                choices,
+                default: config.claudeEffort || 'high'
+            });
+
+            config.claudeEffort = selectedEffort;
+            await saveConfig(config);
+            if (providerInstance) {
+                providerInstance.config.claudeEffort = selectedEffort;
+            }
+            console.log(chalk.green(`Claude reasoning effort updated to: ${selectedEffort.toUpperCase()}`));
+            break;
+        }
+        case '/skill-creator':
+            config.skillCreatorMode = true;
             config.planMode = false;
             config.askMode = false;
             config.securityMode = false;
@@ -476,9 +592,24 @@ async function handleSlashCommand(command) {
             } else {
                 providerInstance = createProvider();
             }
+            console.log(chalk.cyan(`Skill Creator mode enabled. The AI will help you create custom Agent Skills.`));
+            break;
+        case '/agent':
+            config.planMode = false;
+            config.askMode = false;
+            config.securityMode = false;
+            config.skillCreatorMode = false;
+            await saveConfig(config);
+            if (providerInstance) {
+                const savedMessages = providerInstance.messages;
+                providerInstance = createProvider();
+                providerInstance.messages = savedMessages;
+            } else {
+                providerInstance = createProvider();
+            }
             console.log(chalk.green(`Agent mode enabled. The AI will make changes directly.`));
             break;
-        case '/chats':
+        case '/chats': {
             const sessions = await listSessions();
             if (sessions.length === 0) {
                 console.log(chalk.yellow("No saved chat sessions found."));
@@ -518,7 +649,8 @@ async function handleSlashCommand(command) {
                 }
             }
             break;
-        case '/memory':
+        }
+        case '/memory': {
             if (config.useMemory === false) {
                 console.log(chalk.yellow("Global AI Memory is disabled. Enable it in /settings first."));
                 break;
@@ -572,6 +704,7 @@ async function handleSlashCommand(command) {
                 }
             }
             break;
+        }
         case '/init':
             console.log(chalk.cyan("Generating project summary for BANANA.md..."));
             const initSpinner = ora({ text: 'Analyzing project...', color: 'yellow', stream: process.stdout }).start();
@@ -620,7 +753,10 @@ Available commands:
   /init            - Generate a BANANA.md project summary file
   /plan            - Enable Plan Mode (AI proposes a plan for big changes)
   /agent           - Enable Agent Mode (default, AI edits directly)
+  /skill-creator   - Enable Skill Creator Mode (AI helps you create custom skills)
   /yolo            - Toggle YOLO mode (skip all permission requests)
+  /style           - Change AI writing style (Formal, Explanatory, etc)
+  /effort          - Change Claude reasoning effort (low, medium, high, xhigh, max)
   /debug           - Toggle debug mode (show tool results)
   /help            - Show all commands
   /exit            - Quit Banana Code
@@ -629,6 +765,8 @@ Available commands:
         case '/exit':
             console.log(chalk.yellow(`\nTo resume this session: node bin/banana.js --resume ${currentSessionId}`));
             console.log(chalk.yellow("🍌 Bye BananaCode. See ya!"));
+            showFinalCost();
+            cleanupTerminalSessions();
             process.exit(0);
             break;
         default:
@@ -754,6 +892,7 @@ function drawPromptBox(inputText, cursorPos) {
     if (config.askMode) modeDisplay = chalk.blue('ASK MODE');
     else if (config.securityMode) modeDisplay = chalk.red('SECURITY MODE');
     else if (config.planMode) modeDisplay = chalk.magenta('PLAN MODE');
+    else if (config.skillCreatorMode) modeDisplay = chalk.cyan('SKILL CREATOR MODE');
     
     let tokenDisplay = '';
     if (config.showTokenCount && providerInstance) {
@@ -820,6 +959,7 @@ function drawPromptBoxInitial(inputText) {
     if (config.askMode) modeDisplay = chalk.blue('ASK MODE');
     else if (config.securityMode) modeDisplay = chalk.red('SECURITY MODE');
     else if (config.planMode) modeDisplay = chalk.magenta('PLAN MODE');
+    else if (config.skillCreatorMode) modeDisplay = chalk.cyan('SKILL CREATOR MODE');
     
     let tokenDisplay = '';
     if (config.showTokenCount && providerInstance) {
@@ -888,7 +1028,7 @@ function promptUser() {
             originalResolve(val);
         };
 
-        const handleExit = () => {
+        const handleExit = async () => {
             if (!exitRequested) {
                 exitRequested = true;
                 const moveDown = lastPromptRows + 1; // rough guess
@@ -900,6 +1040,9 @@ function promptUser() {
                 process.stdout.write(`\x1b[${moveDown}B\x1b[2K\x1b[1B\x1b[2K\x1b[1G\n`);
                 console.log(chalk.yellow(`\nTo resume this session: node bin/banana.js --resume ${currentSessionId}`));
                 console.log(chalk.yellow("🍌 Bye BananaCode. See ya!"));
+                await saveCurrentSession();
+                showFinalCost();
+                cleanupTerminalSessions();
                 mcpManager.cleanup();
                 process.exit(0);
             }
@@ -1040,7 +1183,9 @@ async function main() {
                 host = '0.0.0.0';
             }
 
-            await startApiServer(port, createProvider, host);
+            const noAuth = process.argv.includes('--no-auth');
+
+            await startApiServer(port, createProvider, host, noAuth);
             return;
         }
 
@@ -1077,6 +1222,13 @@ async function main() {
             providerInstance = createProvider();
         }
 
+        let ultraMemoryInterval;
+        if (config.useUltraMemory) {
+            import('./utils/ultraMemory.js').then(({ runUltraMemoryBackground }) => {
+                ultraMemoryInterval = setInterval(() => runUltraMemoryBackground(config, createProvider), 60000);
+                runUltraMemoryBackground(config, createProvider);
+            });
+        }
 
         while (true) {
             const inputLine = await promptUser();
@@ -1091,32 +1243,81 @@ async function main() {
                 await handleSlashCommand(trimmed);
             } else {
                 let finalInput = trimmed;
-                const fileMentions = trimmed.match(/@@?([\w/.-]+)/g);
-                if (fileMentions) {
+                let attachedImages = [];
+                
+                // Robustly extract file mentions, supporting quoted paths like @"path with spaces"
+                const fileMentions = [];
+                const mentionRegex = /@@?("[^"]+"|[^\s]+)/g;
+                let match;
+                while ((match = mentionRegex.exec(trimmed)) !== null) {
+                    fileMentions.push(match[0]);
+                }
+
+                if (fileMentions.length > 0) {
                     let addedFiles = 0;
+                    let addedImages = 0;
                     const fsSync = await import('fs');
                     const path = await import('path');
+                    const os = await import('os');
+                    
                     for (const mention of fileMentions) {
+                        let isDouble = mention.startsWith('@@');
+                        let rawPath = isDouble ? mention.substring(2) : mention.substring(1);
+                        
+                        // Remove quotes if present
+                        if (rawPath.startsWith('"') && rawPath.endsWith('"')) {
+                            rawPath = rawPath.substring(1, rawPath.length - 1);
+                        }
+
                         let filepath;
-                        if (mention.startsWith('@@')) {
-                            filepath = mention.substring(2);
+
+                        // Expand ~ to home directory
+                        if (rawPath.startsWith('~')) {
+                            rawPath = path.join(os.homedir(), rawPath.substring(1));
+                        }
+
+                        // Resolve absolute vs relative
+                        if (path.isAbsolute(rawPath) || rawPath.startsWith('/') || rawPath.startsWith('\\')) {
+                            filepath = rawPath;
                         } else {
-                            filepath = path.join(process.cwd(), mention.substring(1));
+                            filepath = path.resolve(process.cwd(), rawPath);
                         }
                         
                         try {
-                            const stat = fsSync.statSync(filepath);
-                            if (stat.isFile()) {
-                                const content = fsSync.readFileSync(filepath, 'utf8');
-                                finalInput += `\n\n--- File Context: ${filepath} ---\n${content}\n--- End of ${filepath} ---`;
-                                addedFiles++;
+                            if (fsSync.existsSync(filepath)) {
+                                const stat = fsSync.statSync(filepath);
+                                if (stat.isFile()) {
+                                    const lower = filepath.toLowerCase();
+                                    const isImage = lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.webp') || lower.endsWith('.gif');
+                                    
+                                    if (isImage) {
+                                        const buffer = fsSync.readFileSync(filepath);
+                                        const base64 = buffer.toString('base64');
+                                        let mimeType = 'image/png';
+                                        if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) mimeType = 'image/jpeg';
+                                        else if (lower.endsWith('.webp')) mimeType = 'image/webp';
+                                        else if (lower.endsWith('.gif')) mimeType = 'image/gif';
+                                        
+                                        attachedImages.push({ base64, mimeType, path: filepath });
+                                        addedImages++;
+                                    } else {
+                                        const content = fsSync.readFileSync(filepath, 'utf8');
+                                        finalInput += `\n\n--- File Context: ${filepath} ---\n${content}\n--- End of ${filepath} ---`;
+                                        addedFiles++;
+                                    }
+                                }
+                            } else {
+                                throw new Error('File does not exist');
                             }
                         } catch (e) {
-                            console.log(chalk.yellow(`Warning: Could not read file for mention ${mention}`));
+                            console.log(chalk.yellow(`Warning: Could not read file for mention ${mention} (Resolved path: ${filepath})`));
                         }
                     }
-                    if (addedFiles > 0) {
-                        console.log(chalk.gray(`(Attached ${addedFiles} file(s) to context)`));
+                    if (addedFiles > 0 || addedImages > 0) {
+                        const fileMsg = addedFiles > 0 ? `${addedFiles} file(s)` : '';
+                        const imgMsg = addedImages > 0 ? `${addedImages} image(s)` : '';
+                        const separator = (addedFiles > 0 && addedImages > 0) ? ' and ' : '';
+                        console.log(chalk.gray(`(Attached ${fileMsg}${separator}${imgMsg} to context)`));
                     }
                 }
 
@@ -1132,7 +1333,7 @@ async function main() {
                 }
 
                 process.stdout.write(chalk.cyan('✦ '));
-                await providerInstance.sendMessage(finalInput);
+                await providerInstance.sendMessage({ text: finalInput, images: attachedImages });
                 console.log(); // Extra newline after AI response
 
                 // Auto-generate title every 10 messages (or on the 3rd message)
@@ -1140,31 +1341,23 @@ async function main() {
                 if (!currentSessionTitle && msgLen >= 3 || msgLen > 0 && msgLen % 10 === 0) {
                     const titleSpinner = ora({ text: 'Generating chat title...', color: 'gray', stream: process.stdout }).start();
                     try {
-                        // Temporarily disable terminal formatting and debug for the title request
                         const originalUseMarked = config.useMarkedTerminal;
                         const originalDebug = config.debug;
                         config.useMarkedTerminal = false;
                         config.debug = false;
                         
-                        // Temporarily silence stdout so the model's streaming text doesn't bleed into the terminal
-                        const originalStdoutWrite = process.stdout.write;
-                        process.stdout.write = () => {};
-
                         const titlePrompt = "SYSTEM: You are a title generator. Based on this conversation, provide a VERY SHORT (2-5 words) title. Reply ONLY with the title string, no quotes or formatting.";
                         
-                        // Use a temporary provider instance so we never pollute the main history array
-                        const titleProvider = createProvider();
-                        // Deep copy messages so the AI knows the context, but modifications don't leak back
-                        titleProvider.messages = JSON.parse(JSON.stringify(providerInstance.messages));
+                        // Use isApiMode to keep the title generation completely silent
+                        const titleConfig = { ...config, isApiMode: true };
+                        const titleProvider = createProvider(titleConfig);
                         
-                        let title = '';
-                        try {
-                            title = await titleProvider.sendMessage(titlePrompt);
-                        } finally {
-                            // Always restore stdout even if it crashes
-                            process.stdout.write = originalStdoutWrite;
+                        // Deep copy messages so the AI knows the context, but modifications don't leak back
+                        if (providerInstance.messages) {
+                            titleProvider.messages = JSON.parse(JSON.stringify(providerInstance.messages));
                         }
                         
+                        const title = await titleProvider.sendMessage(titlePrompt);
                         currentSessionTitle = title.replace(/['"]/g, '').trim();
 
                         config.useMarkedTerminal = originalUseMarked;
@@ -1182,6 +1375,11 @@ async function main() {
                     messages: providerInstance.messages,
                     title: currentSessionTitle
                 });
+
+                if (config.useUltraMemory) {
+                    const { runUltraMemoryBackground } = await import('./utils/ultraMemory.js');
+                    runUltraMemoryBackground(config, createProvider);
+                }
             }
         }
     } catch (error) {
@@ -1190,11 +1388,58 @@ async function main() {
     }
 }
 
+async function saveCurrentSession() {
+    if (currentSessionId && providerInstance) {
+        try {
+            await saveSession(currentSessionId, {
+                provider: config.provider,
+                model: config.model || providerInstance.modelName,
+                messages: providerInstance.messages,
+                title: currentSessionTitle
+            });
+        } catch (e) {
+            // silent fail on exit
+        }
+    }
+}
+
+function showFinalCost() {
+    if (providerInstance && typeof providerInstance.calculateSessionCost === 'function') {
+        const { cost, savings } = providerInstance.calculateSessionCost();
+        if (parseFloat(cost) > 0) {
+            console.log(chalk.yellow(`\nFinal Session Cost: $${cost}`));
+            if (parseFloat(savings) > 0) {
+                console.log(chalk.cyan(`You saved $${savings} this session thanks to Prompt Caching! 🍌`));
+            }
+        }
+    }
+}
+
 main();
 
-process.on('uncaughtException', (err) => {
-    console.error(chalk.red('Uncaught Exception:'), err);
+process.on('SIGINT', async () => {
+    await saveCurrentSession();
+    showFinalCost();
+    cleanupTerminalSessions();
+    process.exit(0);
 });
-process.on('unhandledRejection', (reason) => {
+process.on('SIGTERM', async () => {
+    await saveCurrentSession();
+    showFinalCost();
+    cleanupTerminalSessions();
+    process.exit(0);
+});
+process.on('uncaughtException', async (err) => {
+    console.error(chalk.red('Uncaught Exception:'), err);
+    await saveCurrentSession();
+    showFinalCost();
+    cleanupTerminalSessions();
+    process.exit(1);
+});
+process.on('unhandledRejection', async (reason) => {
     console.error(chalk.red('Unhandled Rejection:'), reason);
+    await saveCurrentSession();
+    showFinalCost();
+    cleanupTerminalSessions();
+    process.exit(1);
 });

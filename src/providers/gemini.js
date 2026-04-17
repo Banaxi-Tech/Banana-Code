@@ -135,17 +135,40 @@ export class GeminiProvider {
         return { model: GEMINI_AUTO_FALLBACK_MODEL, reason: 'Auto-routing failed, using fallback model.' };
     }
 
-    async sendMessage(message) {
+    async sendMessage(input) {
+        let message = '';
+        let images = [];
+        if (typeof input === 'string') {
+            message = input;
+        } else {
+            message = input.text;
+            images = input.images || [];
+        }
+
         let activeModel = this.modelName;
         if (this.modelName === 'auto') {
             const routing = await this.autoRoute(message);
             activeModel = routing.model;
-            console.log(chalk.magenta(`\n[Auto Mode] → ${chalk.yellow(activeModel)}: ${routing.reason}`));
+            if (!this.config.isApiMode) {
+                console.log(chalk.magenta(`\n[Auto Mode] → ${chalk.yellow(activeModel)}: ${routing.reason}`));
+            }
         }
 
-        this.messages.push({ role: 'user', parts: [{ text: message }] });
+        const userParts = [{ text: message }];
+        for (const img of images) {
+            userParts.push({
+                inlineData: {
+                    mimeType: img.mimeType,
+                    data: img.base64
+                }
+            });
+        }
+        this.messages.push({ role: 'user', parts: userParts });
 
-        let spinner = ora({ text: 'Thinking...', color: 'yellow', stream: process.stdout }).start();
+        let spinner = null;
+        if (!this.config.isApiMode) {
+            spinner = ora({ text: 'Thinking...', color: 'yellow', stream: process.stdout }).start();
+        }
         let responseText = '';
 
         try {
@@ -262,15 +285,19 @@ export class GeminiProvider {
                         if (this.config.isApiMode && this.onToolStart) {
                             this.onToolStart(call.name);
                         }
-                        console.log(chalk.yellow(`\n[Banana Calling Tool: ${call.name}]`));
+                        if (!this.config.isApiMode) {
+                            console.log(chalk.yellow(`\n[Banana Calling Tool: ${call.name}]`));
+                        }
                         const res = await executeTool(call.name, call.args, this.config);
                         if (this.config.isApiMode && this.onToolEnd) {
                             this.onToolEnd(res);
                         }
-                        if (this.config.debug) {
+                        if (this.config.debug && !this.config.isApiMode) {
                             console.log(chalk.gray(`[DEBUG] Tool Result: ${typeof res === 'string' ? res : JSON.stringify(res, null, 2)}`));
                         }
-                        console.log(chalk.yellow(`[Tool Result Received]\n`));
+                        if (!this.config.isApiMode) {
+                            console.log(chalk.yellow(`[Tool Result Received]\n`));
+                        }
 
                         toolResults.push({
                             functionResponse: {
@@ -284,14 +311,18 @@ export class GeminiProvider {
                 if (!hasToolCalls) break;
 
                 this.messages.push({ role: 'user', parts: toolResults });
-                spinner = ora({ text: 'Processing tool results...', color: 'yellow', stream: process.stdout }).start();
+                if (!this.config.isApiMode) {
+                    spinner = ora({ text: 'Processing tool results...', color: 'yellow', stream: process.stdout }).start();
+                }
             }
 
-            console.log(); // Newline after stream
+            if (!this.config.isApiMode) console.log(); // Newline after stream
             return responseText;
         } catch (err) {
             if (spinner && spinner.isSpinning) spinner.stop();
-            console.error(chalk.red(`Gemini Error: ${err.message}`));
+            if (!this.config.isApiMode) {
+                console.error(chalk.red(`Gemini Error: ${err.message}`));
+            }
             return `Error: ${err.message}`;
         }
     }

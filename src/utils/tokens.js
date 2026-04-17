@@ -42,3 +42,49 @@ export function estimateConversationTokens(messages) {
 
     return estimateTokens(totalString);
 }
+
+/**
+ * Estimates the token breakdown for the conversation history.
+ * 
+ * @param {Array} messages - The array of message objects.
+ * @returns {Object} breakdown - An object with tokens and percentages.
+ */
+export function getContextBreakdown(messages) {
+    if (!Array.isArray(messages)) return { total: 0, system: 0, chat: 0, tools: 0, other: 0 };
+    
+    let systemTokens = 0;
+    let chatTokens = 0;
+    let toolTokens = 0;
+    let otherTokens = 0;
+
+    messages.forEach(msg => {
+        const str = JSON.stringify(msg);
+        const tokens = estimateTokens(str);
+
+        if (msg.role === 'system') {
+            systemTokens += tokens;
+        } else if (msg.role === 'tool' || msg.tool_calls || msg.tool_call_id || (msg.parts && msg.parts.some(p => p.functionCall || p.functionResponse))) {
+            toolTokens += tokens;
+        } else if (msg.role === 'user' || msg.role === 'assistant' || msg.role === 'model' || msg.role === 'output_text') {
+            chatTokens += tokens;
+        } else {
+            otherTokens += tokens;
+        }
+    });
+
+    const total = systemTokens + chatTokens + toolTokens + otherTokens;
+    
+    return {
+        total,
+        system: systemTokens,
+        chat: chatTokens,
+        tools: toolTokens,
+        other: otherTokens,
+        percentages: {
+            system: total > 0 ? Math.round((systemTokens / total) * 100) : 0,
+            chat: total > 0 ? Math.round((chatTokens / total) * 100) : 0,
+            tools: total > 0 ? Math.round((toolTokens / total) * 100) : 0,
+            other: total > 0 ? Math.round((otherTokens / total) * 100) : 0
+        }
+    };
+}

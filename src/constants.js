@@ -7,7 +7,8 @@ export const GEMINI_MODELS = [
 ];
 
 export const CLAUDE_MODELS = [
-    { name: 'Claude Opus 4.6 (Flagship)', value: 'claude-opus-4-6' },
+    { name: 'Claude Opus 4.7 (Flagship)', value: 'claude-opus-4-7' },
+    { name: 'Claude Opus 4.6', value: 'claude-opus-4-6' },
     { name: 'Claude Sonnet 4.6 (Fast & Smart)', value: 'claude-sonnet-4-6' },
     { name: 'Claude Haiku 4.5', value: 'claude-haiku-4-5' }
 ];
@@ -41,6 +42,12 @@ export const MISTRAL_MODELS = [
 export const CODEX_MODELS = [
     { name: 'GPT-5.4 (Newest)', value: 'gpt-5.4' },
     { name: 'GPT-5.3 Codex', value: 'gpt-5.3-codex' },
-    { name: 'GPT-5.2 Codex', value: 'gpt-5.2-codex' },
     { name: 'GPT-5.2 (General, Cheapest)', value: 'gpt-5.2' }
 ];
+
+export const CLAUDE_PRICING = {
+    'claude-opus-4-7':   { input: 5.0, output: 25.0, cacheWrite: 6.25, cacheRead: 0.50 },
+    'claude-opus-4-6':   { input: 5.0, output: 25.0, cacheWrite: 6.25, cacheRead: 0.50 },
+    'claude-sonnet-4-6': { input: 3.0, output: 15.0, cacheWrite: 3.75, cacheRead: 0.30 },
+    'claude-haiku-4-5':  { input: 1.0, output: 5.0,  cacheWrite: 1.25, cacheRead: 0.10 }
+};

@@ -20,6 +20,7 @@ export async function saveSession(uuid, data) {
     await ensureChatsDir();
     const filePath = path.join(CHATS_DIR, `${uuid}.json`);
     const sessionData = {
+        ...data,
         uuid,
         title: data.title || null,
         updatedAt: new Date().toISOString(),

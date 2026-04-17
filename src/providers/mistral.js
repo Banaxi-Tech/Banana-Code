@@ -54,17 +54,40 @@ export class MistralProvider {
         return { model: MISTRAL_MODELS[0].value, reason: 'Auto-routing failed, using most capable model.' };
     }
 
-    async sendMessage(message) {
+    async sendMessage(input) {
+        let message = '';
+        let images = [];
+        if (typeof input === 'string') {
+            message = input;
+        } else {
+            message = input.text;
+            images = input.images || [];
+        }
+
         let activeModel = this.modelName;
         if (this.modelName === 'auto') {
             const routing = await this.autoRoute(message);
             activeModel = routing.model;
-            console.log(chalk.magenta(`\n[Auto Mode] → ${chalk.yellow(activeModel)}: ${routing.reason}`));
+            if (!this.config.isApiMode) {
+                console.log(chalk.magenta(`\n[Auto Mode] → ${chalk.yellow(activeModel)}: ${routing.reason}`));
+            }
         }
 
-        this.messages.push({ role: 'user', content: message });
+        const userContent = [{ type: 'text', text: message }];
+        for (const img of images) {
+            userContent.push({
+                type: 'image_url',
+                image_url: {
+                    url: `data:${img.mimeType};base64,${img.base64}`
+                }
+            });
+        }
+        this.messages.push({ role: 'user', content: userContent });
 
-        let spinner = ora({ text: 'Thinking...', color: 'yellow', stream: process.stdout }).start();
+        let spinner = null;
+        if (!this.config.isApiMode) {
+            spinner = ora({ text: 'Thinking...', color: 'yellow', stream: process.stdout }).start();
+        }
         let finalResponse = '';
 
         try {
@@ -78,8 +101,10 @@ export class MistralProvider {
                         stream: true
                     });
                 } catch (e) {
-                    spinner.stop();
-                    console.error(chalk.red(`Mistral Request Error: ${e.message}`));
+                    if (spinner) spinner.stop();
+                    if (!this.config.isApiMode) {
+                        console.error(chalk.red(`Mistral Request Error: ${e.message}`));
+                    }
                     return `Error: ${e.message}`;
                 }
 
@@ -90,16 +115,20 @@ export class MistralProvider {
                     const delta = chunk.choices[0]?.delta;
 
                     if (delta?.content) {
-                        if (spinner.isSpinning && !this.config.useMarkedTerminal) spinner.stop();
+                        if (spinner && spinner.isSpinning && !this.config.useMarkedTerminal) spinner.stop();
                         if (!this.config.useMarkedTerminal) {
-                            process.stdout.write(chalk.cyan(delta.content));
+                            if (this.config.isApiMode && this.onChunk) {
+                                this.onChunk(delta.content);
+                            } else if (!this.config.isApiMode) {
+                                process.stdout.write(chalk.cyan(delta.content));
+                            }
                         }
                         chunkResponse += delta.content;
                         finalResponse += delta.content;
                     }
 
                     if (delta?.tool_calls) {
-                        if (spinner.isSpinning) spinner.stop();
+                        if (spinner && spinner.isSpinning) spinner.stop();
                         for (const tc of delta.tool_calls) {
                             if (tc.index === undefined) continue;
                             if (!toolCalls[tc.index]) {
@@ -108,26 +137,28 @@ export class MistralProvider {
                             if (tc.function?.arguments) {
                                 toolCalls[tc.index].function.arguments += tc.function.arguments;
                                 // Visual feedback for streaming tool arguments
-                                if (!spinner.isSpinning) {
-                                    spinner = ora({ text: `Generating ${chalk.yellow(toolCalls[tc.index].function.name)} (${toolCalls[tc.index].function.arguments.length} bytes)...`, color: 'yellow', stream: process.stdout }).start();
-                                } else {
-                                    spinner.text = `Generating ${chalk.yellow(toolCalls[tc.index].function.name)} (${toolCalls[tc.index].function.arguments.length} bytes)...`;
+                                if (!this.config.isApiMode) {
+                                    if (!spinner || !spinner.isSpinning) {
+                                        spinner = ora({ text: `Generating ${chalk.yellow(toolCalls[tc.index].function.name)} (${toolCalls[tc.index].function.arguments.length} bytes)...`, color: 'yellow', stream: process.stdout }).start();
+                                    } else {
+                                        spinner.text = `Generating ${chalk.yellow(toolCalls[tc.index].function.name)} (${toolCalls[tc.index].function.arguments.length} bytes)...`;
+                                    }
                                 }
                             }
                         }
                     }
                 }
-                if (spinner.isSpinning) spinner.stop();
+                if (spinner && spinner.isSpinning) spinner.stop();
 
                 if (chunkResponse) {
-                    if (this.config.useMarkedTerminal) printMarkdown(chunkResponse);
+                    if (this.config.useMarkedTerminal && !this.config.isApiMode) printMarkdown(chunkResponse);
                     this.messages.push({ role: 'assistant', content: chunkResponse });
                 }
 
                 toolCalls = toolCalls.filter(Boolean);
 
                 if (toolCalls.length === 0) {
-                    console.log();
+                    if (!this.config.isApiMode) console.log();
                     break;
                 }
 
@@ -141,7 +172,9 @@ export class MistralProvider {
                     if (this.config.isApiMode && this.onToolStart) {
                         this.onToolStart(call.function.name);
                     }
-                    console.log(chalk.yellow(`\n[Banana Calling Tool: ${call.function.name}]`));
+                    if (!this.config.isApiMode) {
+                        console.log(chalk.yellow(`\n[Banana Calling Tool: ${call.function.name}]`));
+                    }
                     let args = {};
                     try {
                         args = JSON.parse(call.function.arguments);
@@ -151,10 +184,12 @@ export class MistralProvider {
                     if (this.config.isApiMode && this.onToolEnd) {
                         this.onToolEnd(res);
                     }
-                    if (this.config.debug) {
+                    if (this.config.debug && !this.config.isApiMode) {
                         console.log(chalk.gray(`[DEBUG] Tool Result: ${typeof res === 'string' ? res : JSON.stringify(res, null, 2)}`));
                     }
-                    console.log(chalk.yellow(`[Tool Result Received]\n`));
+                    if (!this.config.isApiMode) {
+                        console.log(chalk.yellow(`[Tool Result Received]\n`));
+                    }
 
                     this.messages.push({
                         role: 'tool',
@@ -163,13 +198,17 @@ export class MistralProvider {
                     });
                 }
 
-                spinner = ora({ text: 'Processing tool results...', color: 'yellow', stream: process.stdout }).start();
+                if (!this.config.isApiMode) {
+                    spinner = ora({ text: 'Processing tool results...', color: 'yellow', stream: process.stdout }).start();
+                }
             }
 
             return finalResponse;
         } catch (err) {
             if (spinner && spinner.isSpinning) spinner.stop();
-            console.error(chalk.red(`Mistral Runtime Error: ${err.message}`));
+            if (!this.config.isApiMode) {
+                console.error(chalk.red(`Mistral Runtime Error: ${err.message}`));
+            }
             return `Error: ${err.message}`;
         }
     }
