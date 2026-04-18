@@ -1099,6 +1099,7 @@ function promptUser() {
         const originalResolve = resolve;
         resolve = (val) => {
             resolveCalled = true;
+            process.stdout.write('\x1b[?2004l'); // disable bracketed paste mode
             if (process.stdin.isTTY) {
                 process.stdin.setRawMode(false);
             }
@@ -1150,9 +1151,37 @@ function promptUser() {
 
         process.stdin.setRawMode(true);
         process.stdin.resume();
+        process.stdout.write('\x1b[?2004h'); // enable bracketed paste mode
+
+        let isPasting = false;
+        let pasteBuffer = '';
 
         onData = (key) => {
-            const str = key.toString();
+            let str = key.toString();
+
+            // Bracketed paste: accumulate content between \x1b[200~ and \x1b[201~,
+            // then insert it all at once with newlines normalized to spaces.
+            if (str.includes('\x1b[200~') || isPasting) {
+                if (str.includes('\x1b[200~')) {
+                    isPasting = true;
+                    str = str.slice(str.indexOf('\x1b[200~') + 6);
+                }
+                if (str.includes('\x1b[201~')) {
+                    isPasting = false;
+                    str = str.slice(0, str.indexOf('\x1b[201~'));
+                    const fullPaste = (pasteBuffer + str).replace(/\r\n/g, ' ').replace(/[\r\n]/g, ' ');
+                    pasteBuffer = '';
+                    if (fullPaste.length > 0) {
+                        exitRequested = false;
+                        inputBuffer = inputBuffer.slice(0, cursorPos) + fullPaste + inputBuffer.slice(cursorPos);
+                        cursorPos += fullPaste.length;
+                        drawPromptBox(inputBuffer, cursorPos);
+                    }
+                } else {
+                    pasteBuffer += str;
+                }
+                return;
+            }
 
             if (str === '\x03') { handleExit(); return; }       // CTRL+C
             if (str === '\x04') { handleExit(); return; }       // CTRL+D
