@@ -23,6 +23,13 @@ import { startApiServer } from './server.js';
 
 let config;
 let providerInstance;
+// Expose for Banana Guard cost tracking
+Object.defineProperty(global, 'activeProviderInstance', {
+    get() { return providerInstance; },
+    set(val) { providerInstance = val; },
+    configurable: true
+});
+
 let currentSessionId;
 let currentSessionTitle = null;
 const commandHistory = [];
@@ -161,6 +168,12 @@ async function handleSlashCommand(command) {
                         console.log(chalk.yellow(`Could not validate on OpenRouter: ${err.message}`));
                     }
                 }
+                if (newModel.endsWith('-fast')) {
+                    console.log(chalk.red.bold('\n⚠️  FAST MODE WARNING:'));
+                    console.log(chalk.yellow('This model uses significantly more compute power and costs 6x more than standard Opus.'));
+                    console.log(chalk.yellow('It provides 2.5x faster output speeds but will consume your API credits much faster.\n'));
+                }
+
                 config.model = newModel;
                 await saveConfig(config);
                 if (providerInstance) {
@@ -381,11 +394,23 @@ async function handleSlashCommand(command) {
                         checked: config.useMemory !== false
                     },
                     {
+                        name: 'Enable Banana Guard (AI-Powered Auto-Approve for safe commands)',
+                        value: 'useBananaGuard',
+                        checked: config.useBananaGuard !== false
+                    },
+                    {
+                        name: 'Enable Claude 1-Hour Prompt Cache (2x write cost, longer session life)',
+                        value: 'useExtendedCache',
+                        checked: config.useExtendedCache || false
+                    },
+                    {
                         name: 'Enable UltraMemory (Scans chats in background, HIGH API USAGE)',
                         value: 'useUltraMemory',
                         checked: config.useUltraMemory || false
                     }
-                ]
+                ],
+                loop: false,
+                pageSize: 20
             });
 
             if (enabledSettings.includes('useUltraMemory') && !config.useUltraMemory) {
@@ -408,6 +433,8 @@ async function handleSlashCommand(command) {
             config.usePatchFile = enabledSettings.includes('usePatchFile');
             config.showTokenCount = enabledSettings.includes('showTokenCount');
             config.useMemory = enabledSettings.includes('useMemory');
+            config.useBananaGuard = enabledSettings.includes('useBananaGuard');
+            config.useExtendedCache = enabledSettings.includes('useExtendedCache');
             config.useUltraMemory = enabledSettings.includes('useUltraMemory');
 
             await saveConfig(config);
@@ -510,6 +537,18 @@ async function handleSlashCommand(command) {
                 providerInstance = createProvider();
             }
             console.log(config.yolo ? chalk.bgRed.white.bold('\n ⚠️ YOLO MODE ENABLED - All permission requests will be auto-accepted! \n') : chalk.green('\nYOLO mode disabled.\n'));
+            break;
+        case '/guard':
+            config.useBananaGuard = !config.useBananaGuard;
+            await saveConfig(config);
+            if (providerInstance) {
+                const savedMessages = providerInstance.messages;
+                providerInstance = createProvider();
+                providerInstance.messages = savedMessages;
+            } else {
+                providerInstance = createProvider();
+            }
+            console.log(chalk.green(`🛡️  Banana Guard ${config.useBananaGuard ? 'enabled. AI will auto-approve safe commands.' : 'disabled. All commands require manual approval.'}`));
             break;
         case '/style': {
             const { select: styleSelect } = await import('@inquirer/prompts');
@@ -754,6 +793,7 @@ Available commands:
   /plan            - Enable Plan Mode (AI proposes a plan for big changes)
   /agent           - Enable Agent Mode (default, AI edits directly)
   /skill-creator   - Enable Skill Creator Mode (AI helps you create custom skills)
+  /guard           - Toggle Banana Guard (AI auto-approve safe commands)
   /yolo            - Toggle YOLO mode (skip all permission requests)
   /style           - Change AI writing style (Formal, Explanatory, etc)
   /effort          - Change Claude reasoning effort (low, medium, high, xhigh, max)
@@ -861,26 +901,48 @@ function playHistory(session) {
 }
 
 let lastPromptRows = 1;
+// Tracks the cursor's offset within the prompt block at the END of the previous
+// draw, so the next redraw knows how far up to go to reach row 0. Without this,
+// using `lastPromptRows - 1` assumes the cursor sits on the bottom row, which
+// isn't true when the user moves the cursor or when typing crosses a row
+// boundary — leading to redraws landing above the prompt and leaving stale
+// content (e.g. duplicate ' > ' lines).
+let lastCursorRow = 0;
 
 function drawPromptBox(inputText, cursorPos) {
     const width = getTermWidth();
     const placeholder = 'Type your message or @path/to/file';
     const prefix = ' > ';
 
-    const visibleText = (inputText.length === 0) ? (prefix + chalk.gray(placeholder)) : (prefix + chalk.white(inputText));
-    const totalChars = (prefix.length + Math.max(inputText.length, placeholder.length));
-    const rows = Math.ceil(totalChars / width) || 1;
+    const isEmpty = inputText.length === 0;
+    const rawContent = isEmpty ? placeholder : inputText;
+    const colorFn = isEmpty ? chalk.gray : chalk.white;
+    const totalChars = prefix.length + rawContent.length;
+    const cursorIndex = prefix.length + cursorPos;
+    // Ensure we always have enough rows to host the cursor, even when input
+    // exactly fills the last row (cursor sits at start of next line).
+    const rows = Math.max(Math.ceil(totalChars / width) || 1, Math.floor(cursorIndex / width) + 1);
 
-    // Move back to the start of the prompt block
-    if (lastPromptRows > 1) {
-        process.stdout.write(`\x1b[${lastPromptRows - 1}A`);
+    // Move back to row 0 of the prompt block, then wipe everything below so the
+    // redraw starts from a clean slate.
+    if (lastCursorRow > 0) {
+        process.stdout.write(`\x1b[${lastCursorRow}A`);
     }
-    process.stdout.write(`\x1b[1G`);
+    process.stdout.write(`\x1b[1G\x1b[J`);
 
-    // Draw each row with background
+    // Draw each row: slice raw content, then color per-segment so ANSI escapes
+    // never bleed across line boundaries.
+    const firstRowChars = width - prefix.length;
     for (let i = 0; i < rows; i++) {
-        const start = i * width;
-        const lineText = visibleText.substring(start, start + width);
+        let segment, lineText;
+        if (i === 0) {
+            segment = rawContent.substring(0, firstRowChars);
+            lineText = prefix + colorFn(segment);
+        } else {
+            const offset = firstRowChars + (i - 1) * width;
+            segment = rawContent.substring(offset, offset + width);
+            lineText = colorFn(segment);
+        }
         process.stdout.write(userBg(padLine(lineText, width)) + '\n');
     }
 
@@ -910,8 +972,16 @@ function drawPromptBox(inputText, cursorPos) {
         tokenDisplay = ` / Tokens: ${color(tokens.toLocaleString())}`;
     }
     
+    let costDisplay = '';
+    if (providerInstance && typeof providerInstance.calculateSessionCost === 'function') {
+        const { cost } = providerInstance.calculateSessionCost();
+        if (parseFloat(cost) > 0) {
+            costDisplay = ` / Cost: ${chalk.green('$' + cost)}`;
+        }
+    }
+    
     const yoloDisplay = config.yolo ? chalk.bgRed.white.bold(' YOLO ') : '';
-    const leftText = ` Provider: ${chalk.cyan(providerDisplay)} / Model: ${chalk.yellow(modelDisplay)} / ${modeDisplay}${tokenDisplay}${yoloDisplay ? ' / ' + yoloDisplay : ''}`;
+    const leftText = ` Provider: ${chalk.cyan(providerDisplay)} / Model: ${chalk.yellow(modelDisplay)} / ${modeDisplay}${tokenDisplay}${costDisplay}${yoloDisplay ? ' / ' + yoloDisplay : ''}`;
     const rightText = '/help for shortcuts ';
     const leftStripped = leftText.replace(/\x1b\[[0-9;]*m/g, '');
     const midPad = Math.max(0, width - leftStripped.length - rightText.length);
@@ -924,13 +994,14 @@ function drawPromptBox(inputText, cursorPos) {
     lastPromptRows = rows;
 
     // Position cursor: find row and col
-    const cursorIndex = prefix.length + cursorPos;
     const targetRow = Math.floor(cursorIndex / width);
     const targetCol = (cursorIndex % width) + 1;
 
     // Move cursor back up (2 for status/sep + N-1-targetRow for prompt rows)
     const moveUp = (rows - 1 - targetRow) + 2;
     process.stdout.write(`\x1b[${moveUp}A\x1b[${targetCol}G`);
+
+    lastCursorRow = targetRow;
 }
 
 function drawPromptBoxInitial(inputText) {
@@ -938,16 +1009,27 @@ function drawPromptBoxInitial(inputText) {
     const placeholder = 'Type your message or @path/to/file';
     const prefix = ' > ';
 
-    const visibleText = (inputText.length === 0) ? (prefix + chalk.gray(placeholder)) : (prefix + chalk.white(inputText));
-    const totalChars = (prefix.length + Math.max(inputText.length, placeholder.length));
-    const rows = Math.ceil(totalChars / width) || 1;
+    const isEmpty = inputText.length === 0;
+    const rawContent = isEmpty ? placeholder : inputText;
+    const colorFn = isEmpty ? chalk.gray : chalk.white;
+    const totalChars = prefix.length + rawContent.length;
+    const cursorIndex = prefix.length + (inputText.length || 0);
+    const rows = Math.max(Math.ceil(totalChars / width) || 1, Math.floor(cursorIndex / width) + 1);
 
     lastPromptRows = rows;
 
-    // Draw initial wrapped lines
+    // Draw initial wrapped lines: slice raw content first, color per-segment.
+    const firstRowChars = width - prefix.length;
     for (let i = 0; i < rows; i++) {
-        const start = i * width;
-        const lineText = visibleText.substring(start, start + width);
+        let segment, lineText;
+        if (i === 0) {
+            segment = rawContent.substring(0, firstRowChars);
+            lineText = prefix + colorFn(segment);
+        } else {
+            const offset = firstRowChars + (i - 1) * width;
+            segment = rawContent.substring(offset, offset + width);
+            lineText = colorFn(segment);
+        }
         process.stdout.write(userBg(padLine(lineText, width)) + '\n');
     }
 
@@ -977,8 +1059,16 @@ function drawPromptBoxInitial(inputText) {
         tokenDisplay = ` / Tokens: ${color(tokens.toLocaleString())}`;
     }
     
+    let costDisplay = '';
+    if (providerInstance && typeof providerInstance.calculateSessionCost === 'function') {
+        const { cost } = providerInstance.calculateSessionCost();
+        if (parseFloat(cost) > 0) {
+            costDisplay = ` / Cost: ${chalk.green('$' + cost)}`;
+        }
+    }
+    
     const yoloDisplay = config.yolo ? chalk.bgRed.white.bold(' YOLO ') : '';
-    const leftText = ` Provider: ${chalk.cyan(providerDisplay)} / Model: ${chalk.yellow(modelDisplay)} / ${modeDisplay}${tokenDisplay}${yoloDisplay ? ' / ' + yoloDisplay : ''}`;
+    const leftText = ` Provider: ${chalk.cyan(providerDisplay)} / Model: ${chalk.yellow(modelDisplay)} / ${modeDisplay}${tokenDisplay}${costDisplay}${yoloDisplay ? ' / ' + yoloDisplay : ''}`;
     const rightText = '/help for shortcuts ';
 
     const leftStripped = leftText.replace(/\x1b\[[0-9;]*m/g, '');
@@ -990,12 +1080,13 @@ function drawPromptBoxInitial(inputText) {
     process.stdout.write(separator);
 
     // Move cursor back up to content line (up 2 for status/sep + N-1 for wrapping)
-    const cursorIndex = prefix.length + (inputText.length || 0);
     const targetRow = Math.floor(cursorIndex / width);
     const moveUp = (rows - 1 - targetRow) + 2;
     const targetCol = (cursorIndex % width) + 1;
 
     process.stdout.write(`\x1b[${moveUp}A\x1b[${targetCol}G`);
+
+    lastCursorRow = targetRow;
 }
 
 function promptUser() {
@@ -1158,6 +1249,15 @@ function promptUser() {
 async function main() {
     try {
         config = await loadConfig();
+
+        // Default Banana Guard to true for existing users upgrading
+        if (config.useBananaGuard === undefined) {
+            config.useBananaGuard = true;
+        }
+
+        // Global pointers for Banana Guard
+        global.bananaConfig = config;
+        global.createProvider = createProvider;
 
         if (process.argv.includes('--yolo')) {
             config.yolo = true;
@@ -1348,8 +1448,20 @@ async function main() {
                         
                         const titlePrompt = "SYSTEM: You are a title generator. Based on this conversation, provide a VERY SHORT (2-5 words) title. Reply ONLY with the title string, no quotes or formatting.";
                         
+                        const { AUTO_ROUTER_MODELS } = await import('./utils/autoModel.js');
+                        let titleModel = config.model;
+                        
+                        let providerKey = config.provider;
+                        if (providerKey === 'openai' && config.authType === 'oauth') {
+                            providerKey = 'openai_oauth';
+                        }
+                        
+                        if (AUTO_ROUTER_MODELS[providerKey]) {
+                            titleModel = AUTO_ROUTER_MODELS[providerKey];
+                        }
+
                         // Use isApiMode to keep the title generation completely silent
-                        const titleConfig = { ...config, isApiMode: true };
+                        const titleConfig = { ...config, isApiMode: true, model: titleModel };
                         const titleProvider = createProvider(titleConfig);
                         
                         // Deep copy messages so the AI knows the context, but modifications don't leak back

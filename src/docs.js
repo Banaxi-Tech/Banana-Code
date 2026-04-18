@@ -16,6 +16,7 @@ Type these into the chat to control the app:
 - /ask        : Enable Ask Mode (Read-only, AI cannot edit files).
 - /security   : Enable Security Mode (AI focuses on finding vulnerabilities).
 - /skill-creator: Enable Skill Creator Mode (AI helps you write custom Agent Skills).
+- /guard      : Toggle Banana Guard (AI auto-approve for safe commands).
 - /yolo       : Toggle YOLO mode (Auto-approve all tool permissions).
 - /settings   : Manage features like Auto-feed workspace, Syntax highlighting, and Memory.
 - /beta       : Enable beta features like MCP (Model Context Protocol) and search tools.

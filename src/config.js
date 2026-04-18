@@ -76,6 +76,15 @@ export async function setupProvider(provider, config = {}) {
             message: 'Select a Claude model:',
             choices: [AUTO_CHOICE, ...CLAUDE_MODELS]
         });
+        
+        config.useExtendedCache = await select({
+            message: 'Select Prompt Caching duration:',
+            choices: [
+                { name: '5 Minutes (Default - Cheaper to write)', value: false },
+                { name: '1 Hour (Better for long coding sessions - Costs 2x more to write)', value: true }
+            ],
+            default: false
+        });
     } else if (provider === 'mistral') {
         config.apiKey = await input({
             message: 'Enter your MISTRAL_API_KEY (from console.mistral.ai):',
@@ -247,6 +256,20 @@ async function runSetupWizard() {
 
     const config = await setupProvider(provider);
     config.useMemory = true;
+
+    console.log(chalk.cyan('\n🛡️  Banana Guard (AI Auto-Approve)'));
+    console.log(chalk.gray('This feature uses a smart model to automatically approve safe shell commands (like ls, git status, etc) so you don\'t have to click "Allow" constantly.'));
+    
+    const { select: guardSelect } = await import('@inquirer/prompts');
+    const guardChoice = await guardSelect({
+        message: 'Would you like to enable Banana Guard?',
+        choices: [
+            { name: 'Yes (Smarter & Faster Workflow - Recommended)', value: true },
+            { name: 'No (Manually approve every command)', value: false }
+        ],
+        default: true
+    });
+    config.useBananaGuard = guardChoice;
 
     await saveConfig(config);
     console.log(chalk.yellow.bold("\nYou're all peeled and ready. Type your first message!\n"));

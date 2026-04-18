@@ -27,6 +27,36 @@ export async function requestPermission(actionType, details) {
         return { allowed: true };
     }
 
+    // Banana Guard AI Auto-Approve
+    const config = global.bananaConfig;
+    const createProvider = global.createProvider;
+    
+    if (config && config.useBananaGuard !== false) {
+        // Only commands and URLs get AI scrutiny
+        if (actionType === 'Execute Command' || actionType === 'Execute Interactive Command' || actionType === 'Fetch URL') {
+            if (createProvider) {
+                const { runBananaGuard } = await import('./utils/guard.js');
+                const guardResult = await runBananaGuard(actionType, details, config, createProvider);
+                
+                if (guardResult.allowed) {
+                    const actionLabel = actionType === 'Fetch URL' ? 'URL' : 'command';
+                    console.log(chalk.green(`🛡️  [Banana Guard] AI Auto-approved safe ${actionLabel}: ${chalk.gray(details.substring(0, 50))}${details.length > 50 ? '...' : ''}`));
+
+                    // Report costs back to the main session if supported
+                    if (guardResult.usage && global.activeProviderInstance && typeof global.activeProviderInstance.addUsage === 'function') {
+                        global.activeProviderInstance.addUsage(guardResult.usage, guardResult.model);
+                    }
+
+                    return { allowed: true };
+                }
+            }
+        } else {
+            // Auto-approve everything else (write_file, patch_file, etc.)
+            console.log(chalk.green(`🛡️  [Banana Guard] Auto-approved action: ${chalk.gray(actionType)}`));
+            return { allowed: true };
+        }
+    }
+
     if (typeof global.apiPermissionHandler === 'function') {
         const ticketId = crypto.randomUUID();
         const result = await global.apiPermissionHandler(ticketId, actionType, details);

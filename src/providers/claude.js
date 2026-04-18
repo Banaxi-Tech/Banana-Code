@@ -11,7 +11,12 @@ export class ClaudeProvider {
     constructor(config) {
         this.config = config;
         this.anthropic = new Anthropic({ apiKey: config.apiKey });
-        this.modelName = config.model || 'claude-3-7-sonnet-20250219';
+        
+        this.modelName = config.model || 'claude-sonnet-4-6';
+        this.isFastMode = this.modelName.endsWith('-fast');
+        // The base model ID used for API calls (without the internal -fast suffix)
+        this.activeApiModel = this.isFastMode ? this.modelName.replace('-fast', '') : this.modelName;
+
         this.messages = [];
         this.tools = getAvailableTools(config).map(t => ({
             name: t.name,
@@ -155,14 +160,17 @@ export class ClaudeProvider {
             while (true) {
                 let stream = null;
                 try {
+                    // Translate our internal virtual model IDs (like *-fast) back to 
+                    // official Anthropic model IDs before sending the request.
+                    const cacheObj = this.config.useExtendedCache ? { type: 'ephemeral', ttl: '1h' } : { type: 'ephemeral' };
                     const params = {
-                        model: activeModel,
+                        model: activeModel === 'auto' ? activeModel : (activeModel.endsWith('-fast') ? activeModel.replace('-fast', '') : activeModel),
                         max_tokens: 8192,
                         system: [
                             {
                                 type: 'text',
                                 text: this.systemPrompt,
-                                cache_control: { type: 'ephemeral' }
+                                cache_control: cacheObj
                             }
                         ],
                         messages: this.messages.map((msg, idx) => {
@@ -170,12 +178,12 @@ export class ClaudeProvider {
                             // This ensures the entire conversation up to the last turn is cached
                             if (idx === this.messages.length - 1) {
                                 if (typeof msg.content === 'string') {
-                                    return { ...msg, content: [{ type: 'text', text: msg.content, cache_control: { type: 'ephemeral' } }] };
+                                    return { ...msg, content: [{ type: 'text', text: msg.content, cache_control: cacheObj }] };
                                 } else if (Array.isArray(msg.content)) {
                                     const newContent = [...msg.content];
                                     const lastTextPart = [...newContent].reverse().find(p => p.type === 'text');
                                     if (lastTextPart) {
-                                        lastTextPart.cache_control = { type: 'ephemeral' };
+                                        lastTextPart.cache_control = cacheObj;
                                     }
                                     return { ...msg, content: newContent };
                                 }
@@ -186,8 +194,17 @@ export class ClaudeProvider {
                         stream: true
                     };
 
+                    // Enable Fast Mode if selected
+                    if (activeModel.endsWith('-fast')) {
+                        params.speed = 'fast';
+                        // Use a local copy or ensures headers are sent via constructor config if using higher-level SDK
+                        // For this SDK version, we add the beta header to the request
+                        params.betas = (params.betas || []).concat(['fast-mode-2026-02-01']);
+                    }
+
                     // Apply reasoning effort for models that support output_config
-                    if (activeModel.includes('opus-4') || activeModel.includes('sonnet-4')) {
+                    const modelCheck = params.model;
+                    if (modelCheck.includes('opus-4') || modelCheck.includes('sonnet-4')) {
                         params.output_config = {
                             effort: activeEffort
                         };
@@ -300,7 +317,7 @@ export class ClaudeProvider {
                 }
 
                 for (const tc of toolCalls) {
-                    try { tc.input = JSON.parse(tc.input); } catch (e) { }
+                    try { tc.input = JSON.parse(tc.input || "{}"); } catch (e) { tc.input = {}; }
                     newContent.push({
                         type: 'tool_use',
                         id: tc.id,

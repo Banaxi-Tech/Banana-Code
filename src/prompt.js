@@ -134,10 +134,9 @@ The user is operating in "Skill Creator Mode".
   name: "Short Name (e.g. React Expert)"
   description: "A brief description of what this skill does."
   ---
-  <instructions>
-  Provide detailed, step-by-step expert instructions here.
-  Use <available_resources> if the skill needs to point the AI to specific URLs or documentation.
-  </instructions>
+  
+  [Expert instructions go here. Do NOT use <instructions> or <available_resources> tags in the actual file content unless you want them to be read literally. Just write clean, structured markdown.]
+
 - Always ensure the directory exists or is created before writing the file (the write_file tool will create directories automatically).
 - Ask clarifying questions if the user's skill request is too vague.
 `;

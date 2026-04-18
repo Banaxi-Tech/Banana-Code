@@ -61,6 +61,7 @@ While tools like Cursor provide great GUI experiences, Banana Code is built for 
 - **Smart Context & Pruning**: Use `@file/path.js` to instantly inject file contents, auto-feed your workspace, and use `/clean` to instantly compress long chat histories to save tokens.
 - **Web Research**: Deep integration with DuckDuckGo APIs and Scrapers to give the AI real-time access to the internet.
 - **Persistent Sessions**: All chats are auto-titled and saved. Use `/chats` for a fully interactive menu to resume any past session.
+- **🛡️ Banana Guard**: AI-Powered Auto-Approve. Instead of clicking "Allow" on every single action, Banana Guard automatically approves all file-system operations (`write_file`, `patch_file`, etc.). For shell commands, it uses a second, fast AI check to automatically approve safe tasks (like `ls` or `npm install`) while still stopping risky operations for your review. This gives you the speed of YOLO mode with a security layer for your shell.
 - **Syntax Highlighting**: Beautiful, readable markdown output with syntax coloring directly in your terminal.
 
 ## 🚀 Installation

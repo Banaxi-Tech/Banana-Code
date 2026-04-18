@@ -9,6 +9,9 @@ export const GEMINI_MODELS = [
 export const CLAUDE_MODELS = [
     { name: 'Claude Opus 4.7 (Flagship)', value: 'claude-opus-4-7' },
     { name: 'Claude Opus 4.6', value: 'claude-opus-4-6' },
+    // Virtual ID: 'claude-opus-4-6-fast' is used internally to track premium pricing.
+    // It is translated back to the real 'claude-opus-4-6' ID before being sent to the API.
+    { name: 'Claude Opus 4.6 (Fast Mode - 6x Cost)', value: 'claude-opus-4-6-fast' },
     { name: 'Claude Sonnet 4.6 (Fast & Smart)', value: 'claude-sonnet-4-6' },
     { name: 'Claude Haiku 4.5', value: 'claude-haiku-4-5' }
 ];
@@ -46,8 +49,9 @@ export const CODEX_MODELS = [
 ];
 
 export const CLAUDE_PRICING = {
-    'claude-opus-4-7':   { input: 5.0, output: 25.0, cacheWrite: 6.25, cacheRead: 0.50 },
-    'claude-opus-4-6':   { input: 5.0, output: 25.0, cacheWrite: 6.25, cacheRead: 0.50 },
-    'claude-sonnet-4-6': { input: 3.0, output: 15.0, cacheWrite: 3.75, cacheRead: 0.30 },
-    'claude-haiku-4-5':  { input: 1.0, output: 5.0,  cacheWrite: 1.25, cacheRead: 0.10 }
+    'claude-opus-4-7':   { input: 5.0, output: 25.0, cacheWrite: 6.25, cacheWrite1h: 10.0, cacheRead: 0.50 },
+    'claude-opus-4-6':   { input: 5.0, output: 25.0, cacheWrite: 6.25, cacheWrite1h: 10.0, cacheRead: 0.50 },
+    'claude-opus-4-6-fast': { input: 30.0, output: 150.0, cacheWrite: 37.50, cacheWrite1h: 60.0, cacheRead: 3.00 },
+    'claude-sonnet-4-6': { input: 3.0, output: 15.0, cacheWrite: 3.75, cacheWrite1h: 6.0, cacheRead: 0.30 },
+    'claude-haiku-4-5':  { input: 1.0, output: 5.0,  cacheWrite: 1.25, cacheWrite1h: 2.0, cacheRead: 0.10 }
 };
