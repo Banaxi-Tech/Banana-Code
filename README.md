@@ -41,6 +41,11 @@ Banana Code is a high-performance, terminal-based AI pair programmer. It combine
                                              #S#SSSSSS%%%?%%%%S
 ```
 
+## Privacy
+When you download Banana Code, a request is sent to our server to count downloads. 
+Your IP address is processed momentarily to filter bots but is never stored.
+Only the total download count is saved.
+
 ## 🤔 Why Banana Code?
 While tools like Cursor provide great GUI experiences, Banana Code is built for developers who live in the terminal and want maximum flexibility. 
 - **No Vendor Lock-in**: Switch instantly between the best proprietary models (Gemini, Claude, OpenAI) and high-performance open-source models (Ollama Local, Ollama Cloud) mid-conversation.
