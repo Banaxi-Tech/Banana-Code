@@ -126,7 +126,7 @@ async function handleSlashCommand(command) {
                     if (config.provider === 'ollama_cloud' || config.provider === 'mistral') {
                         finalChoices.push({ name: chalk.magenta('✎ Enter custom model ID...'), value: 'CUSTOM_ID' });
                     }
-                    
+
                     newModel = await select({
                         message: 'Select a model:',
                         choices: finalChoices,
@@ -200,31 +200,31 @@ async function handleSlashCommand(command) {
                 console.log(chalk.yellow("Not enough history to summarize."));
                 break;
             }
-            
+
             console.log(chalk.cyan("Summarizing context to save tokens..."));
             const summarySpinner = ora({ text: 'Compressing history...', color: 'yellow', stream: process.stdout }).start();
-            
+
             try {
                 // Temporarily disable terminal formatting for the summary request
                 const originalUseMarked = config.useMarkedTerminal;
                 config.useMarkedTerminal = false;
-                
+
                 // Create a temporary prompt asking for a summary
                 const summaryPrompt = "SYSTEM INSTRUCTION: Please provide a highly concise summary of our entire conversation so far. Focus ONLY on the overall goal, the current state of the project, any important decisions made, and what we were about to do next. Do not include pleasantries. This summary will be used as your memory going forward.";
-                
+
                 // Ask the AI to summarize
                 const summary = await providerInstance.sendMessage(summaryPrompt);
-                
+
                 // Restore settings
                 config.useMarkedTerminal = originalUseMarked;
                 summarySpinner.stop();
-                
+
                 // Re-initialize the provider to wipe old history
                 providerInstance = createProvider();
-                
+
                 // Inject the summary as the first message after the system prompt
                 const summaryMemory = `[PREVIOUS CONVERSATION SUMMARY]\n${summary}`;
-                
+
                 if (config.provider === 'gemini') {
                     providerInstance.messages.push({ role: 'user', parts: [{ text: summaryMemory }] });
                     providerInstance.messages.push({ role: 'model', parts: [{ text: "I have stored the summary of our previous conversation in my memory." }] });
@@ -235,18 +235,18 @@ async function handleSlashCommand(command) {
                     providerInstance.messages.push({ role: 'user', content: summaryMemory });
                     providerInstance.messages.push({ role: 'assistant', content: "I have stored the summary of our previous conversation in my memory." });
                 }
-                
+
                 console.log(chalk.green(`\nContext successfully compressed!`));
                 if (config.debug) {
                     console.log(chalk.gray(`\n[Saved Summary]:\n${summary}\n`));
                 }
-                
+
                 await saveSession(currentSessionId, {
                     provider: config.provider,
                     model: config.model || providerInstance.modelName,
                     messages: providerInstance.messages
                 });
-                
+
             } catch (err) {
                 summarySpinner.stop();
                 console.log(chalk.red(`Failed to compress context: ${err.message}`));
@@ -305,7 +305,7 @@ async function handleSlashCommand(command) {
                 value: t.name,
                 checked: (config.betaTools || []).includes(t.name)
             }));
-            
+
             // Add beta commands that aren't tools
             choices.push({
                 name: '/clean command (Context Compression)',
@@ -335,7 +335,7 @@ async function handleSlashCommand(command) {
                 console.log(chalk.yellow("Usage may violate DuckDuckGo's Terms of Service."));
                 console.log(chalk.yellow('Your IP address may be blocked if you use this too frequently.'));
                 console.log(chalk.yellow('You agree to use this only for personal, non-commercial research.\n'));
-                
+
                 const { confirm } = await import('@inquirer/prompts');
                 const agreed = await confirm({ message: 'Do you agree to these terms?' });
                 if (!agreed) {
@@ -568,7 +568,7 @@ async function handleSlashCommand(command) {
                 const savedMessages = providerInstance.messages;
                 providerInstance = createProvider();
                 providerInstance.messages = savedMessages;
-                
+
                 // Ensure the system prompt is updated in the message history if applicable
                 const newSysPrompt = getSystemPrompt(config);
                 if (typeof providerInstance.updateSystemPrompt === 'function') {
@@ -586,7 +586,7 @@ async function handleSlashCommand(command) {
                 break;
             }
             const { select: effortSelect } = await import('@inquirer/prompts');
-            
+
             const currentModel = providerInstance ? providerInstance.modelName : (config.model || '');
             const isAdvancedModel = currentModel.includes('opus-4') || currentModel.includes('sonnet-4');
             const isOpus47 = currentModel.includes('opus-4-7');
@@ -663,7 +663,7 @@ async function handleSlashCommand(command) {
                         value: s.uuid
                     };
                 });
-                
+
                 const selectedSessionId = await chatSelect({
                     message: 'Select a chat session to resume:',
                     choices: choices,
@@ -750,24 +750,24 @@ async function handleSlashCommand(command) {
             try {
                 const { getWorkspaceTree } = await import('./utils/workspace.js');
                 const tree = await getWorkspaceTree();
-                
+
                 const initProvider = createProvider();
                 // We use a completely blank slate for this so it doesn't get confused
-                initProvider.messages = []; 
-                
+                initProvider.messages = [];
+
                 let initPrompt = "SYSTEM: You are a project summarizer. Review the following project file tree and briefly describe what this project is, what technologies it uses, and any obvious conventions. Keep it under 2 paragraphs. Output ONLY the summary text.";
                 initPrompt += `\n\n--- Project Tree ---\n${tree}`;
-                
+
                 const summary = await initProvider.sendMessage(initPrompt);
-                
+
                 const fs = await import('fs/promises');
                 const path = await import('path');
                 const bananaPath = path.join(process.cwd(), 'BANANA.md');
                 await fs.writeFile(bananaPath, summary, 'utf8');
-                
+
                 initSpinner.stop();
                 console.log(chalk.green(`Successfully created BANANA.md!`));
-                
+
                 // Re-init current provider so it picks up the new BANANA.md
                 providerInstance = createProvider();
             } catch (err) {
@@ -955,7 +955,7 @@ function drawPromptBox(inputText, cursorPos) {
     else if (config.securityMode) modeDisplay = chalk.red('SECURITY MODE');
     else if (config.planMode) modeDisplay = chalk.magenta('PLAN MODE');
     else if (config.skillCreatorMode) modeDisplay = chalk.cyan('SKILL CREATOR MODE');
-    
+
     let tokenDisplay = '';
     if (config.showTokenCount && providerInstance) {
         let msgs = providerInstance.messages || [];
@@ -968,10 +968,10 @@ function drawPromptBox(inputText, cursorPos) {
         if (tokens >= 128000) color = chalk.red;
         else if (tokens >= 86000) color = chalk.hex('#FFA500'); // Orange
         else if (tokens >= 64000) color = chalk.yellow;
-        
+
         tokenDisplay = ` / Tokens: ${color(tokens.toLocaleString())}`;
     }
-    
+
     let costDisplay = '';
     if (providerInstance && typeof providerInstance.calculateSessionCost === 'function') {
         const { cost } = providerInstance.calculateSessionCost();
@@ -979,7 +979,7 @@ function drawPromptBox(inputText, cursorPos) {
             costDisplay = ` / Cost: ${chalk.green('$' + cost)}`;
         }
     }
-    
+
     const yoloDisplay = config.yolo ? chalk.bgRed.white.bold(' YOLO ') : '';
     const leftText = ` Provider: ${chalk.cyan(providerDisplay)} / Model: ${chalk.yellow(modelDisplay)} / ${modeDisplay}${tokenDisplay}${costDisplay}${yoloDisplay ? ' / ' + yoloDisplay : ''}`;
     const rightText = '/help for shortcuts ';
@@ -1042,7 +1042,7 @@ function drawPromptBoxInitial(inputText) {
     else if (config.securityMode) modeDisplay = chalk.red('SECURITY MODE');
     else if (config.planMode) modeDisplay = chalk.magenta('PLAN MODE');
     else if (config.skillCreatorMode) modeDisplay = chalk.cyan('SKILL CREATOR MODE');
-    
+
     let tokenDisplay = '';
     if (config.showTokenCount && providerInstance) {
         let msgs = providerInstance.messages || [];
@@ -1055,10 +1055,10 @@ function drawPromptBoxInitial(inputText) {
         if (tokens >= 128000) color = chalk.red;
         else if (tokens >= 86000) color = chalk.hex('#FFA500'); // Orange
         else if (tokens >= 64000) color = chalk.yellow;
-        
+
         tokenDisplay = ` / Tokens: ${color(tokens.toLocaleString())}`;
     }
-    
+
     let costDisplay = '';
     if (providerInstance && typeof providerInstance.calculateSessionCost === 'function') {
         const { cost } = providerInstance.calculateSessionCost();
@@ -1066,7 +1066,7 @@ function drawPromptBoxInitial(inputText) {
             costDisplay = ` / Cost: ${chalk.green('$' + cost)}`;
         }
     }
-    
+
     const yoloDisplay = config.yolo ? chalk.bgRed.white.bold(' YOLO ') : '';
     const leftText = ` Provider: ${chalk.cyan(providerDisplay)} / Model: ${chalk.yellow(modelDisplay)} / ${modeDisplay}${tokenDisplay}${costDisplay}${yoloDisplay ? ' / ' + yoloDisplay : ''}`;
     const rightText = '/help for shortcuts ';
@@ -1094,12 +1094,14 @@ function promptUser() {
         let inputBuffer = '';
         let cursorPos = 0;
         let resolveCalled = false;
-        let onData; // Declare early so resolve closure can reference it
+        let onData;    // Declare early so resolve closure can reference it
+        let onResize;  // Same for resize listener
 
         const originalResolve = resolve;
         resolve = (val) => {
             resolveCalled = true;
             process.stdout.write('\x1b[?2004l'); // disable bracketed paste mode
+            if (onResize) process.stdout.removeListener('resize', onResize);
             if (process.stdin.isTTY) {
                 process.stdin.setRawMode(false);
             }
@@ -1272,6 +1274,16 @@ function promptUser() {
         };
 
         process.stdin.on('data', onData);
+
+        // On terminal resize: reset tracking state, jump to the bottom of the
+        // terminal so stale prompt rows scroll off, and redraw with new width.
+        onResize = () => {
+            lastCursorRow = 0;
+            lastPromptRows = 1;
+            process.stdout.write('\x1b[2J\x1b[H');
+            drawPromptBox(inputBuffer, cursorPos);
+        };
+        process.stdout.on('resize', onResize);
     });
 }
 
@@ -1373,7 +1385,7 @@ async function main() {
             } else {
                 let finalInput = trimmed;
                 let attachedImages = [];
-                
+
                 // Robustly extract file mentions, supporting quoted paths like @"path with spaces"
                 const fileMentions = [];
                 const mentionRegex = /@@?("[^"]+"|[^\s]+)/g;
@@ -1388,11 +1400,11 @@ async function main() {
                     const fsSync = await import('fs');
                     const path = await import('path');
                     const os = await import('os');
-                    
+
                     for (const mention of fileMentions) {
                         let isDouble = mention.startsWith('@@');
                         let rawPath = isDouble ? mention.substring(2) : mention.substring(1);
-                        
+
                         // Remove quotes if present
                         if (rawPath.startsWith('"') && rawPath.endsWith('"')) {
                             rawPath = rawPath.substring(1, rawPath.length - 1);
@@ -1411,14 +1423,14 @@ async function main() {
                         } else {
                             filepath = path.resolve(process.cwd(), rawPath);
                         }
-                        
+
                         try {
                             if (fsSync.existsSync(filepath)) {
                                 const stat = fsSync.statSync(filepath);
                                 if (stat.isFile()) {
                                     const lower = filepath.toLowerCase();
                                     const isImage = lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.webp') || lower.endsWith('.gif');
-                                    
+
                                     if (isImage) {
                                         const buffer = fsSync.readFileSync(filepath);
                                         const base64 = buffer.toString('base64');
@@ -1426,7 +1438,7 @@ async function main() {
                                         if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) mimeType = 'image/jpeg';
                                         else if (lower.endsWith('.webp')) mimeType = 'image/webp';
                                         else if (lower.endsWith('.gif')) mimeType = 'image/gif';
-                                        
+
                                         attachedImages.push({ base64, mimeType, path: filepath });
                                         addedImages++;
                                     } else {
@@ -1474,17 +1486,17 @@ async function main() {
                         const originalDebug = config.debug;
                         config.useMarkedTerminal = false;
                         config.debug = false;
-                        
+
                         const titlePrompt = "SYSTEM: You are a title generator. Based on this conversation, provide a VERY SHORT (2-5 words) title. Reply ONLY with the title string, no quotes or formatting.";
-                        
+
                         const { AUTO_ROUTER_MODELS } = await import('./utils/autoModel.js');
                         let titleModel = config.model;
-                        
+
                         let providerKey = config.provider;
                         if (providerKey === 'openai' && config.authType === 'oauth') {
                             providerKey = 'openai_oauth';
                         }
-                        
+
                         if (AUTO_ROUTER_MODELS[providerKey]) {
                             titleModel = AUTO_ROUTER_MODELS[providerKey];
                         }
@@ -1492,12 +1504,12 @@ async function main() {
                         // Use isApiMode to keep the title generation completely silent
                         const titleConfig = { ...config, isApiMode: true, model: titleModel };
                         const titleProvider = createProvider(titleConfig);
-                        
+
                         // Deep copy messages so the AI knows the context, but modifications don't leak back
                         if (providerInstance.messages) {
                             titleProvider.messages = JSON.parse(JSON.stringify(providerInstance.messages));
                         }
-                        
+
                         const title = await titleProvider.sendMessage(titlePrompt);
                         currentSessionTitle = title.replace(/['"]/g, '').trim();
 

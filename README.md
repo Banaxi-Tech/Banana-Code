@@ -130,14 +130,19 @@ While in a chat, use these special commands (type `/help` for the full list):
 | `/skill-creator` | Skill Creator mode: AI helps write custom Agent Skills. |
 | `/ask` | [Ask mode](#ask-mode): questions and explanations only; no project edits. |
 | `/security` | Security-focused review mode (defensive use only). |
+| `/guard` | Toggle Banana Guard (AI auto-approve for safe commands). |
 | `/yolo` | Auto-approve permission prompts (use with care). |
 | `/help` | Show all commands. |
 | `/exit` | Quit (also `Ctrl+D` / `Ctrl+C` flow). |
 
-**File context:** Type `@path/to/file` or `@@/absolute/path` in your message to attach file contents to that prompt.
+**File context:** Type `@path/to/file` or `@@/absolute/path` in your message to attach file contents to that prompt. Use `@@path/to/image.png` to attach an image (supported by Gemini/Claude/OpenAI).
 
 ### ⚡ Auto Mode
 When **Auto Mode** is selected as the model (`/model` or initial setup), each new user message is first sent to a **small, fast router model** (per provider) together with the **last seven conversation messages** (formatted as context only). The router returns JSON: which concrete model should handle **this** turn and a short reason—so short follow-ups like “Implement it” can pick a capable model when the history shows a large task. The assistant’s reply then uses that model. If routing fails, providers fall back to a sensible default (e.g. Gemini may fall back to **Gemini 3 Flash**). **OpenRouter** and **local Ollama** do not offer Auto Mode (fixed model ID vs. local tag list).
+
+### 🚀 Claude Fast Mode
+Select models like **Claude Opus 4.6 (Fast Mode)** from the `/model` menu to dramatically speed up your workflow. Fast Mode provides 2.5x faster output speeds for high-intensity tasks. 
+> **⚠️ WARNING:** Fast Mode consumes significantly more compute and costs approximately 6x more than standard models.
 
 ### OpenRouter setup
 
@@ -153,6 +158,7 @@ Banana Code layers **behavior modes** on top of the normal agent. Only one “st
 | **`/skill-creator`** | [Skill Creator mode](#skill-creator-mode) — expert prompt engineer to create custom Agent Skills. |
 | **`/ask`** | [Ask mode](#ask-mode) — read-only Q&A; no file or state-changing edits. |
 | **`/security`** | [Security mode](#security-mode) — prioritize vulnerability review. |
+| **`/guard`** | Toggle Banana Guard (AI auto-approve for safe commands). |
 | **`/yolo`** | Auto-approve permission prompts (dangerous; use carefully). |
 
 ### Plan mode
@@ -327,6 +333,10 @@ Connect a WebSocket client to `ws://localhost:4000?token=YOUR_TOKEN`.
 ...
 If an invalid `ticketId` is provided, Banana Code automatically blocks the tool execution to ensure safety.
 
+## 🐛 Known Issues
+
+- Its a known issue that when resizing the terminal the Banana Code logo goes away.
+
 ## 🔐 Privacy & Security
 ...
 
@@ -340,3 +350,8 @@ Made with 🍌 by [banaxi](https://github.com/banaxi-tech)
 Banana Code is an independent open-source project and is not affiliated with, endorsed by, or sponsored by OpenAI, Google, Anthropic, or any other AI provider. 
 
 This tool provides an interface to access services you already have permission to use. Users are responsible for complying with the Terms of Service of their respective AI providers. Use of experimental or internal endpoints is at the user's own risk.
+risk.
+ at the user's own risk.
+of experimental or internal endpoints is at the user's own risk.
+risk.
+ at the user's own risk.
