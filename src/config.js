@@ -214,6 +214,31 @@ export async function setupProvider(provider, config = {}) {
                 modelAccepted = true;
             }
         }
+    } else if (provider === 'lmstudio') {
+        config.lmStudioBaseUrl = await input({
+            message: 'Enter your LM Studio base URL:',
+            default: config.lmStudioBaseUrl || 'http://localhost:1234/v1'
+        });
+
+        console.log(chalk.cyan("Detecting running LM Studio models..."));
+        try {
+            const response = await fetch(`${config.lmStudioBaseUrl}/models`);
+            const data = await response.json();
+            const models = data.data.map(m => m.id);
+            if (models.length > 0) {
+                config.model = await select({
+                    message: 'Select a model:',
+                    choices: models.map(m => ({ name: m, value: m })),
+                    default: config.model && config.model !== 'auto' ? config.model : undefined
+                });
+            } else {
+                console.log(chalk.yellow("No models found. Please load a model in LM Studio first."));
+                config.model = await input({ message: 'Fallback model name to configure:', default: config.model || 'model-identifier' });
+            }
+        } catch (error) {
+            console.log(chalk.red(`Could not connect to LM Studio at ${config.lmStudioBaseUrl}.`));
+            config.model = await input({ message: 'Fallback model name to configure:', default: config.model || 'model-identifier' });
+        }
     } else if (provider === 'ollama') {
         console.log(chalk.cyan("Detecting running Ollama models..."));
         try {
@@ -250,8 +275,11 @@ async function runSetupWizard() {
             { name: 'Mistral AI', value: 'mistral' },
             { name: 'OpenRouter (Any Model)', value: 'openrouter' },
             { name: 'Ollama Cloud', value: 'ollama_cloud' },
-            { name: 'Ollama (Local)', value: 'ollama' }
-        ]
+            { name: 'Ollama (Local)', value: 'ollama' },
+            { name: 'LM Studio (Local)', value: 'lmstudio' }
+        ],
+        loop: false,
+        pageSize: 10
     });
 
     const config = await setupProvider(provider);

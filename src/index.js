@@ -9,6 +9,7 @@ import { cleanupTerminalSessions } from './tools/terminal.js';
 import { GeminiProvider } from './providers/gemini.js';
 import { ClaudeProvider } from './providers/claude.js';
 import { OpenAIProvider } from './providers/openai.js';
+import { LMStudioProvider } from './providers/lmstudio.js';
 import { OllamaProvider } from './providers/ollama.js';
 import { OllamaCloudProvider } from './providers/ollamaCloud.js';
 import { MistralProvider } from './providers/mistral.js';
@@ -46,6 +47,7 @@ function createProvider(overrideConfig = null) {
         case 'openrouter': return new OpenRouterProvider(activeConfig);
         case 'ollama_cloud': return new OllamaCloudProvider(activeConfig);
         case 'ollama': return new OllamaProvider(activeConfig);
+        case 'lmstudio': return new LMStudioProvider(activeConfig);
         default:
             console.log(chalk.red(`Unknown provider: ${activeConfig.provider}. Defaulting to Ollama.`));
             activeConfig.provider = 'ollama';
@@ -70,19 +72,22 @@ async function handleSlashCommand(command) {
                         { name: 'Mistral AI', value: 'mistral' },
                         { name: 'OpenRouter (Any Model)', value: 'openrouter' },
                         { name: 'Ollama Cloud', value: 'ollama_cloud' },
-                        { name: 'Ollama (Local)', value: 'ollama' }
-                    ]
+                        { name: 'Ollama (Local)', value: 'ollama' },
+                        { name: 'LM Studio (Local)', value: 'lmstudio' }
+                    ],
+                    loop: false,
+                    pageSize: 10
                 });
             }
 
-            if (['gemini', 'claude', 'openai', 'mistral', 'openrouter', 'ollama_cloud', 'ollama'].includes(newProv)) {
+            if (['gemini', 'claude', 'openai', 'mistral', 'openrouter', 'ollama_cloud', 'ollama', 'lmstudio'].includes(newProv)) {
                 // Use the shared setup logic to get keys/models
                 config = await setupProvider(newProv, config);
                 await saveConfig(config);
                 providerInstance = createProvider();
                 console.log(chalk.green(`Switched provider to ${newProv} (${config.model}).`));
             } else {
-                console.log(chalk.yellow(`Usage: /provider <gemini|claude|openai|mistral|openrouter|ollama_cloud|ollama>`));
+                console.log(chalk.yellow(`Usage: /provider <gemini|claude|openai|mistral|openrouter|ollama_cloud|ollama|lmstudio>`));
             }
             break;
         case '/model':
@@ -117,6 +122,16 @@ async function handleSlashCommand(command) {
                         choices = data.models.map(m => ({ name: m.name, value: m.name }));
                     } catch (e) {
                         console.log(chalk.red("Could not connect to Ollama."));
+                        return;
+                    }
+                } else if (config.provider === 'lmstudio') {
+                    try {
+                        const baseUrl = config.lmStudioBaseUrl || 'http://localhost:1234/v1';
+                        const response = await fetch(`${baseUrl}/models`);
+                        const data = await response.json();
+                        choices = data.data.map(m => ({ name: m.id, value: m.id }));
+                    } catch (e) {
+                        console.log(chalk.red("Could not connect to LM Studio."));
                         return;
                     }
                 }
@@ -559,7 +574,8 @@ async function handleSlashCommand(command) {
                     { name: 'Explanatory (Detailed & Educational)', value: 'explanatory' },
                     { name: 'Formal (Professional & Academic)', value: 'formal' }
                 ],
-                default: config.style || 'normal'
+                default: config.style || 'normal',
+                loop: false
             });
 
             config.style = selectedStyle;
