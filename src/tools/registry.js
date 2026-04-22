@@ -4,6 +4,7 @@ import { getBananaDocs } from './getBananaDocs.js';
 import { readFile } from './readFile.js';
 import { readManyFiles } from './readManyFiles.js';
 import { writeFile } from './writeFile.js';
+import { createDirectory } from './createDirectory.js';
 import { fetchUrl } from './fetchUrl.js';
 import { searchFiles } from './searchFiles.js';
 import { listDirectory } from './listDirectory.js';
@@ -130,6 +131,17 @@ export const TOOLS = [
                 pattern: { type: 'string', description: 'The regex pattern to search for' }
             },
             required: ['directory', 'pattern']
+        }
+    },
+    {
+        name: 'create_directory',
+        description: 'Create a new directory at the specified path. Uses recursive creation if needed.',
+        parameters: {
+            type: 'object',
+            properties: {
+                directoryPath: { type: 'string', description: 'The path of the directory to create' }
+            },
+            required: ['directoryPath']
         }
     },
     {
@@ -347,6 +359,7 @@ export async function executeTool(name, args, config) {
         case 'write_file': return await writeFile(args);
         case 'fetch_url': return await fetchUrl(args);
         case 'search_files': return await searchFiles(args);
+        case 'create_directory': return await createDirectory(args);
         case 'list_directory': return await listDirectory(args);
         case 'duck_duck_go': return await duckDuckGo(args);
         case 'duck_duck_go_scrape': return await duckDuckGoScrape(args);
