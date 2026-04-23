@@ -540,6 +540,52 @@ async function handleSlashCommand(command) {
             console.log(chalk.red(`Security mode enabled. The AI will look for and help fix vulnerabilities.`));
             console.log(chalk.yellow(`Disclaimer: Please only use this mode for defensive purposes to secure your own code, and do not use the identified vulnerabilities maliciously.`));
             break;
+        case '/deepreview': {
+            const { select: reviewSelect } = await import('@inquirer/prompts');
+            const reviewMode = await reviewSelect({
+                message: '🔍 DeepReview — What should I review?',
+                choices: [
+                    {
+                        name: 'Full Review  — Audit the entire current codebase',
+                        value: 'full'
+                    },
+                    {
+                        name: 'Diff Review  — Review only staged/unstaged changes (git status + diff)',
+                        value: 'diff'
+                    }
+                ],
+                loop: false
+            });
+
+            config.deepReviewMode = reviewMode; // 'full' | 'diff'
+            config.planMode = false;
+            config.askMode = false;
+            config.securityMode = false;
+            config.skillCreatorMode = false;
+            await saveConfig(config);
+            if (providerInstance) {
+                const savedMessages = providerInstance.messages;
+                providerInstance = createProvider();
+                providerInstance.messages = savedMessages;
+                const newSysPrompt = getSystemPrompt(config);
+                if (typeof providerInstance.updateSystemPrompt === 'function') {
+                    providerInstance.updateSystemPrompt(newSysPrompt);
+                }
+            } else {
+                providerInstance = createProvider();
+            }
+
+            if (reviewMode === 'diff') {
+                console.log(chalk.blueBright(`\n🔍 DeepReview (Diff) enabled.`));
+                console.log(chalk.gray(`I will run git status and git diff, then review only what has changed.`));
+                console.log(chalk.gray(`No files will be modified. Use /agent to return to normal mode.\n`));
+            } else {
+                console.log(chalk.blueBright(`\n🔍 DeepReview (Full) enabled.`));
+                console.log(chalk.gray(`I will audit the entire codebase for bugs, logic errors, performance issues, and style.`));
+                console.log(chalk.gray(`No files will be modified. Use /agent to return to normal mode.\n`));
+            }
+            break;
+        }
         case '/yolo':
             config.yolo = !config.yolo;
             setYoloMode(config.yolo);
@@ -572,7 +618,8 @@ async function handleSlashCommand(command) {
                 choices: [
                     { name: 'Normal (Default)', value: 'normal' },
                     { name: 'Explanatory (Detailed & Educational)', value: 'explanatory' },
-                    { name: 'Formal (Professional & Academic)', value: 'formal' }
+                    { name: 'Formal (Professional & Academic)', value: 'formal' },
+                    { name: 'Concise (Terse & Code-First)', value: 'concise' }
                 ],
                 default: config.style || 'normal',
                 loop: false
@@ -594,6 +641,37 @@ async function handleSlashCommand(command) {
                 providerInstance = createProvider();
             }
             console.log(chalk.green(`AI style updated to: ${selectedStyle.charAt(0).toUpperCase() + selectedStyle.slice(1)}`));
+            break;
+        }
+        case '/emoji': {
+            const { select: emojiSelect } = await import('@inquirer/prompts');
+            const selectedEmoji = await emojiSelect({
+                message: 'Select an emoji mode for the AI:',
+                choices: [
+                    { name: 'Normal (Default)', value: 'normal' },
+                    { name: 'Minimal (Fewer emojis)', value: 'minimal' },
+                    { name: 'More (Lots of emojis)', value: 'more' }
+                ],
+                default: config.emojiMode || 'normal',
+                loop: false
+            });
+
+            config.emojiMode = selectedEmoji;
+            await saveConfig(config);
+            if (providerInstance) {
+                const savedMessages = providerInstance.messages;
+                providerInstance = createProvider();
+                providerInstance.messages = savedMessages;
+
+                // Ensure the system prompt is updated in the message history if applicable
+                const newSysPrompt = getSystemPrompt(config);
+                if (typeof providerInstance.updateSystemPrompt === 'function') {
+                    providerInstance.updateSystemPrompt(newSysPrompt);
+                }
+            } else {
+                providerInstance = createProvider();
+            }
+            console.log(chalk.green(`Emoji mode updated to: ${selectedEmoji.charAt(0).toUpperCase() + selectedEmoji.slice(1)}`));
             break;
         }
         case '/effort': {
@@ -654,6 +732,7 @@ async function handleSlashCommand(command) {
             config.askMode = false;
             config.securityMode = false;
             config.skillCreatorMode = false;
+            config.deepReviewMode = false;
             await saveConfig(config);
             if (providerInstance) {
                 const savedMessages = providerInstance.messages;
@@ -809,9 +888,11 @@ Available commands:
   /plan            - Enable Plan Mode (AI proposes a plan for big changes)
   /agent           - Enable Agent Mode (default, AI edits directly)
   /skill-creator   - Enable Skill Creator Mode (AI helps you create custom skills)
+  /deepreview      - Enable DeepReview mode (Full codebase audit OR git diff review, no edits)
   /guard           - Toggle Banana Guard (AI auto-approve safe commands)
   /yolo            - Toggle YOLO mode (skip all permission requests)
   /style           - Change AI writing style (Formal, Explanatory, etc)
+  /emoji           - Change AI emoji usage (Normal, Minimal, More)
   /effort          - Change Claude reasoning effort (low, medium, high, xhigh, max)
   /debug           - Toggle debug mode (show tool results)
   /help            - Show all commands

@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { getAvailableTools, executeTool } from '../tools/registry.js';
 import chalk from 'chalk';
 import ora from 'ora';
+import { getRandomSpinnerText } from '../utils/spinner.js';
 import os from 'os';
 import path from 'path';
 import fsSync from 'fs';
@@ -188,7 +189,7 @@ export class OpenAIProvider {
 
         let spinner = null;
         if (!this.config.isApiMode) {
-            spinner = ora({ text: 'Thinking...', color: 'yellow', stream: process.stdout }).start();
+            spinner = ora({ text: getRandomSpinnerText('openai'), color: 'yellow', stream: process.stdout }).start();
         }
         let finalResponse = '';
 
@@ -284,7 +285,16 @@ export class OpenAIProvider {
                         args = JSON.parse(call.function.arguments);
                     } catch (e) { }
 
-                    const res = await executeTool(call.function.name, args, this.config);
+                    let res;
+                    try {
+                        res = await executeTool(call.function.name, args, this.config);
+                    } catch (toolErr) {
+                        if (toolErr.name === 'ExitPromptError') {
+                            res = `[Tool execution was cancelled by the user]`;
+                        } else {
+                            res = `[Tool execution failed: ${toolErr.message}]`;
+                        }
+                    }
                     if (this.config.isApiMode && this.onToolEnd) {
                         this.onToolEnd(res);
                     }
@@ -310,6 +320,23 @@ export class OpenAIProvider {
             return finalResponse;
         } catch (err) {
             if (spinner && spinner.isSpinning) spinner.stop();
+
+            // Repair dangling tool_calls in history
+            for (let i = this.messages.length - 1; i >= 0; i--) {
+                const msg = this.messages[i];
+                if (msg.role === 'assistant' && msg.tool_calls?.length) {
+                    const idsNeeded = msg.tool_calls.map(tc => tc.id);
+                    const idsFulfilled = this.messages.slice(i + 1)
+                        .filter(m => m.role === 'tool')
+                        .map(m => m.tool_call_id);
+                    const missing = idsNeeded.filter(id => !idsFulfilled.includes(id));
+                    if (missing.length > 0) {
+                        this.messages.splice(i, 1); // remove the orphaned assistant message
+                    }
+                    break;
+                }
+            }
+
             if (!this.config.isApiMode) {
                 console.error(chalk.red(`OpenAI Runtime Error: ${err.message}`));
             }
@@ -361,7 +388,13 @@ export class OpenAIProvider {
             for (const msg of history) {
                 if (msg.role === 'user' || msg.role === 'assistant') {
                     if (msg.tool_calls) {
-                        // Add the assistant message with tool calls
+                        if (msg.content) {
+                            result.push({
+                                type: 'message',
+                                role: 'assistant',
+                                content: [{ type: 'output_text', text: msg.content }]
+                            });
+                        }
                         for (const tc of msg.tool_calls) {
                             result.push({
                                 type: 'function_call',
@@ -421,13 +454,16 @@ export class OpenAIProvider {
 
         let spinner = null;
         if (!this.config.isApiMode) {
-            spinner = ora({ text: 'Thinking...', color: 'yellow', stream: process.stdout }).start();
+            spinner = ora({ text: getRandomSpinnerText('openai'), color: 'yellow', stream: process.stdout }).start();
         }
         let finalResponse = '';
 
         try {
             while (true) {
                 const backendInput = mapMessagesToBackend(this.messages);
+                if (this.config.debug) {
+                    console.error(chalk.gray(`[DEBUG] Backend input (${backendInput.length} items): ${JSON.stringify(backendInput, null, 2)}`));
+                }
                 const backendTools = mapToolsToBackend(this.tools);
 
                 const payload = {
@@ -536,6 +572,12 @@ export class OpenAIProvider {
 
                         if (line.startsWith('event: ')) {
                             currentEvent = line.substring(7).trim();
+                            if (this.config.debug) {
+                                console.error(chalk.gray(`[DEBUG] SSE event: ${currentEvent}`));
+                            }
+                            if (this.config.debug && (currentEvent === 'error' || currentEvent === 'response.failed')) {
+                                console.error(chalk.red(`[DEBUG] SSE error data: ${currentDataBuffer}`));
+                            }
                             currentDataBuffer = '';
                         } else if (line.startsWith('data: ')) {
                             currentDataBuffer += line.substring(6).trim();
@@ -596,7 +638,16 @@ export class OpenAIProvider {
                         args = JSON.parse(call.function.arguments);
                     } catch (e) { }
 
-                    const res = await executeTool(call.function.name, args, this.config);
+                    let res;
+                    try {
+                        res = await executeTool(call.function.name, args, this.config);
+                    } catch (toolErr) {
+                        if (toolErr.name === 'ExitPromptError') {
+                            res = `[Tool execution was cancelled by the user]`;
+                        } else {
+                            res = `[Tool execution failed: ${toolErr.message}]`;
+                        }
+                    }
                     if (this.config.isApiMode && this.onToolEnd) {
                         this.onToolEnd(res);
                     }
@@ -623,6 +674,23 @@ export class OpenAIProvider {
 
         } catch (err) {
             if (spinner && spinner.isSpinning) spinner.stop();
+
+            // Repair dangling tool_calls in history
+            for (let i = this.messages.length - 1; i >= 0; i--) {
+                const msg = this.messages[i];
+                if (msg.role === 'assistant' && msg.tool_calls?.length) {
+                    const idsNeeded = msg.tool_calls.map(tc => tc.id);
+                    const idsFulfilled = this.messages.slice(i + 1)
+                        .filter(m => m.role === 'tool')
+                        .map(m => m.tool_call_id);
+                    const missing = idsNeeded.filter(id => !idsFulfilled.includes(id));
+                    if (missing.length > 0) {
+                        this.messages.splice(i, 1); // remove the orphaned assistant message
+                    }
+                    break;
+                }
+            }
+
             if (!this.config.isApiMode) {
                 console.error(chalk.red(`OpenAI Codex Error: ${err.message}`));
             }

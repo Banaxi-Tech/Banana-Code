@@ -1,6 +1,7 @@
 import { getAvailableTools, executeTool, sanitizeSchemaForStrictAPIs } from '../tools/registry.js';
 import chalk from 'chalk';
 import ora from 'ora';
+import { getRandomSpinnerText } from '../utils/spinner.js';
 import { getSystemPrompt } from '../prompt.js';
 import { printMarkdown } from '../utils/markdown.js';
 import { OLLAMA_CLOUD_MODELS } from '../constants.js';
@@ -89,7 +90,7 @@ export class OllamaCloudProvider {
 
         let spinner = null;
         if (!this.config.isApiMode) {
-            spinner = ora({ text: 'Thinking (Cloud)...', color: 'yellow', stream: process.stdout }).start();
+            spinner = ora({ text: getRandomSpinnerText('ollamaCloud'), color: 'yellow', stream: process.stdout }).start();
         }
         let finalResponse = '';
 

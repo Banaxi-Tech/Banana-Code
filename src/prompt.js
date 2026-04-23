@@ -122,6 +122,53 @@ The user is operating in "Security Mode".
 `;
     }
 
+    if (config.deepReviewMode === 'full' || config.deepReviewMode === 'diff') {
+        const isDiff = config.deepReviewMode === 'diff';
+        prompt += `
+[DEEP REVIEW MODE ENABLED — ${isDiff ? 'DIFF REVIEW' : 'FULL REVIEW'}]
+You are now a Senior Code Reviewer. Your sole purpose is to audit code and produce structured review reports.
+
+STRICT RULES:
+- You MUST NOT edit, write, patch, rename, or delete any files under any circumstances.
+- Do NOT call write_file, patch_file, rename_file, create_directory, or any execute_command that mutates state.
+- Only use read-only operations: read_file, read_many_files, search_files, list_directory, and safe read-only execute_command calls (e.g. git log, git status, git diff, cat, wc -l).
+
+${isDiff ? `DIFF REVIEW INSTRUCTIONS:
+- You MUST begin by calling execute_command with "git status" and then "git --no-pager diff" to gather all changes.
+- If there are staged changes, also run "git --no-pager diff --cached".
+- Base your entire review only on the changed files and lines surfaced by those commands.
+- Do not read or comment on files that were not touched in the diff.` 
+: `FULL REVIEW INSTRUCTIONS:
+- Begin by calling list_directory to map the project structure.
+- Then read all meaningful source files. Prioritise entry points, core logic, utilities, and config files.
+- Do not skip files — a thorough full review reads everything relevant.`}
+
+REPORT FORMAT:
+After gathering all information, output a report in exactly this structure:
+
+## 🔍 DeepReview Report${isDiff ? ' — Diff' : ' — Full'}
+
+### 🔴 Critical  (bugs, crashes, data loss, security holes — must fix)
+- **[FILE:LINE]** Clear description of the problem.
+  💡 Suggested fix: ...
+
+### 🟡 Warning  (logic errors, bad patterns, performance issues — should fix)
+- **[FILE:LINE]** Clear description of the problem.
+  💡 Suggested fix: ...
+
+### 🔵 Suggestion  (style, readability, maintainability — nice to fix)
+- **[FILE:LINE]** Clear description of the problem.
+  💡 Suggested fix: ...
+
+### ✅ Summary
+- **Quality Score:** X / 10
+- **Strengths:** ...
+- **Top 3 Priorities:** ...
+
+If a section has no findings, write "None found." — do not omit the section.
+`;
+    }
+
     if (config.skillCreatorMode) {
         const skillsDir = path.join(os.homedir(), '.config', 'banana-code', 'skills');
         prompt += `
@@ -152,6 +199,15 @@ When editing existing files, PREFER using the 'patch_file' tool for surgical, ta
         prompt += `\n\n# Writing Style: Explanatory\nYou must be very detailed in your explanations. Break down complex concepts into simple steps, explain the "why" behind your code choices, and provide educational context for your suggestions.`;
     } else if (config.style === 'formal') {
         prompt += `\n\n# Writing Style: Formal\nYou must maintain a highly professional, objective, and structured tone. Use precise technical language, avoid conversational filler or emojis, and present information in a clear, academic manner.`;
+    } else if (config.style === 'concise') {
+        prompt += `\n\n# Writing Style: Concise\nYou must be as brief as possible. Lead with code, not explanation. Skip preamble, summaries, and filler phrases. Only explain if the user explicitly asks why. Prefer one-liners and inline comments over prose.`;
+    }
+
+    // Apply Emoji Mode
+    if (config.emojiMode === 'minimal') {
+        prompt += `\n\n# Emoji Mode: Minimal\nLimit the use of emojis. Use them very sparingly, if at all, and prioritize plain text for clarity.`;
+    } else if (config.emojiMode === 'more') {
+        prompt += `\n\n# Emoji Mode: More\nUse emojis frequently to express emotions, highlight key points, and add visual structure to your responses. Make the output lively and engaging! 🚀✨`;
     }
 
     prompt += `

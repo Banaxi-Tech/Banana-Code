@@ -1,6 +1,7 @@
 import { getAvailableTools, executeTool, sanitizeSchemaForStrictAPIs } from '../tools/registry.js';
 import chalk from 'chalk';
 import ora from 'ora';
+import { getRandomSpinnerText } from '../utils/spinner.js';
 import { getSystemPrompt } from '../prompt.js';
 import { printMarkdown } from '../utils/markdown.js';
 
@@ -49,7 +50,7 @@ export class OllamaProvider {
 
         let spinner = null;
         if (!this.config.isApiMode) {
-            spinner = ora({ text: 'Thinking...', color: 'yellow', stream: process.stdout }).start();
+            spinner = ora({ text: getRandomSpinnerText('ollama'), color: 'yellow', stream: process.stdout }).start();
         }
         let finalResponse = '';
 

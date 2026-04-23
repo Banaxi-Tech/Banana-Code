@@ -13,6 +13,7 @@ import { duckDuckGoScrape } from './duckDuckGoScrape.js';
 import { patchFile } from './patchFile.js';
 import { activateSkill } from './activateSkill.js';
 import { delegateTask } from './delegateTask.js';
+import { renameFile } from './renameFile.js';
 import { mcpManager } from '../utils/mcp.js';
 import { saveMemoryTool, listMemoryTool, deleteMemoryTool } from './memoryTools.js';
 
@@ -278,6 +279,18 @@ export const TOOLS = [
             },
             required: ['id']
         }
+    },
+    {
+        name: 'rename_file',
+        description: 'Rename or move a file or directory from one path to another.',
+        parameters: {
+            type: 'object',
+            properties: {
+                sourcePath: { type: 'string', description: 'The current path of the file or directory.' },
+                destinationPath: { type: 'string', description: 'The new path for the file or directory.' }
+            },
+            required: ['sourcePath', 'destinationPath']
+        }
     }
 ];
 
@@ -286,6 +299,13 @@ export function getAvailableTools(config = {}) {
         if (config.askMode) {
             const forbiddenInAskMode = ['write_file', 'patch_file'];
             if (forbiddenInAskMode.includes(tool.name)) return false;
+        }
+        if (config.deepReviewMode === 'full' || config.deepReviewMode === 'diff') {
+            const allowedInDeepReview = [
+                'read_file', 'read_many_files', 'search_files', 'list_directory',
+                'execute_command', 'get_banana_docs', 'activate_skill'
+            ];
+            if (!allowedInDeepReview.includes(tool.name)) return false;
         }
         if (tool.beta) {
             return config.betaTools && config.betaTools.includes(tool.name);
@@ -369,6 +389,7 @@ export async function executeTool(name, args, config) {
         case 'save_memory': return await saveMemoryTool(args);
         case 'list_memory': return await listMemoryTool(args);
         case 'delete_memory': return await deleteMemoryTool(args);
+        case 'rename_file': return await renameFile(args);
         default: return `Unknown tool: ${name}`;
     }
 }

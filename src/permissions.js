@@ -40,7 +40,7 @@ export async function requestPermission(actionType, details) {
                 
                 if (guardResult.allowed) {
                     const actionLabel = actionType === 'Fetch URL' ? 'URL' : 'command';
-                    console.log(chalk.green(`🛡️  [Banana Guard] AI Auto-approved safe ${actionLabel}: ${chalk.gray(details.substring(0, 50))}${details.length > 50 ? '...' : ''}`));
+                    console.log(chalk.green(`🛡️  [Banana Guard] Auto-approved ${actionLabel}: ${chalk.gray(details.substring(0, 50))}${details.length > 50 ? '...' : ''}`) + chalk.dim(` — ${guardResult.reason}`));
 
                     // Report costs back to the main session if supported
                     if (guardResult.usage && global.activeProviderInstance && typeof global.activeProviderInstance.addUsage === 'function') {

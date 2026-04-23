@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { getAvailableTools, executeTool } from '../tools/registry.js';
 import chalk from 'chalk';
 import ora from 'ora';
+import { getRandomSpinnerText } from '../utils/spinner.js';
 import { getSystemPrompt } from '../prompt.js';
 import { printMarkdown } from '../utils/markdown.js';
 import { CLAUDE_MODELS, CLAUDE_PRICING } from '../constants.js';
@@ -152,7 +153,7 @@ export class ClaudeProvider {
 
         let spinner = null;
         if (!this.config.isApiMode) {
-            spinner = ora({ text: 'Thinking...', color: 'yellow', stream: process.stdout }).start();
+            spinner = ora({ text: getRandomSpinnerText('claude'), color: 'yellow', stream: process.stdout }).start();
         }
         let finalResponse = '';
 

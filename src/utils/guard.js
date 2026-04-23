@@ -73,10 +73,10 @@ export async function runBananaGuard(actionType, details, config, createProvider
                 allowed: !!result.safe,
                 reason: result.reason || 'No reason provided.',
                 usage: {
-                    input_tokens: guardProvider.sessionUsage.input,
-                    output_tokens: guardProvider.sessionUsage.output,
-                    cache_creation_input_tokens: guardProvider.sessionUsage.cacheWrite,
-                    cache_read_input_tokens: guardProvider.sessionUsage.cacheRead
+                    input_tokens: guardProvider.sessionUsage?.input ?? 0,
+                    output_tokens: guardProvider.sessionUsage?.output ?? 0,
+                    cache_creation_input_tokens: guardProvider.sessionUsage?.cacheWrite ?? 0,
+                    cache_read_input_tokens: guardProvider.sessionUsage?.cacheRead ?? 0
                 },
                 model: guardModel
             };

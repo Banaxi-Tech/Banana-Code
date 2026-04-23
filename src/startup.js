@@ -17,7 +17,7 @@ async function checkAndSendFirstOpenPing() {
             // Send request to the download server to count downloads.
             // Note: The server processes IPs momentarily to filter bots but does not store them.
             // Only the total download count is saved.
-            await fetch('http://bananacode.sh/monitor/download');
+            await fetch('https://bananacode.sh/monitor/download');
             // Save the flag so we don't send it again
             fs.writeFileSync(flagFile, JSON.stringify({ downloaded: true }));
         }

@@ -1,6 +1,7 @@
 import { getAvailableTools, executeTool, sanitizeSchemaForStrictAPIs } from '../tools/registry.js';
 import chalk from 'chalk';
 import ora from 'ora';
+import { getRandomSpinnerText } from '../utils/spinner.js';
 import { getSystemPrompt } from '../prompt.js';
 import { printMarkdown } from '../utils/markdown.js';
 import { GEMINI_MODELS } from '../constants.js';
@@ -167,7 +168,7 @@ export class GeminiProvider {
 
         let spinner = null;
         if (!this.config.isApiMode) {
-            spinner = ora({ text: 'Thinking...', color: 'yellow', stream: process.stdout }).start();
+            spinner = ora({ text: getRandomSpinnerText('gemini'), color: 'yellow', stream: process.stdout }).start();
         }
         let responseText = '';
 

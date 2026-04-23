@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { getAvailableTools, executeTool, sanitizeSchemaForStrictAPIs } from '../tools/registry.js';
 import chalk from 'chalk';
 import ora from 'ora';
+import { getRandomSpinnerText } from '../utils/spinner.js';
 import { getSystemPrompt } from '../prompt.js';
 import { printMarkdown } from '../utils/markdown.js';
 
@@ -57,7 +58,7 @@ export class LMStudioProvider {
 
         let spinner = null;
         if (!this.config.isApiMode) {
-            spinner = ora({ text: 'Thinking (LM Studio)...', color: 'yellow', stream: process.stdout }).start();
+            spinner = ora({ text: getRandomSpinnerText('lmstudio'), color: 'yellow', stream: process.stdout }).start();
         }
         let finalResponse = '';
 
