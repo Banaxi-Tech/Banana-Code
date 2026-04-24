@@ -296,47 +296,217 @@ Banana Code 2.0.0 tracks your actual API expenditure. By using real usage data f
 ## 📡 Headless API Mode (`--api`)
 Banana Code can be run as a background engine, exposing its powerful tool-calling and provider-switching logic via a local HTTP and WebSocket server. This allows you to build custom GUIs (Electron, Tauri, React) on top of the Banana Code engine.
 
-### 🔐 API Security (Token Auth)
-Starting in v2.0.0, the API server is protected by a **Secure API Token**. 
-- A 32-character hex token is automatically generated on your first start.
-- You can find your token at `~/.config/banana-code/token.json`.
-- **All requests must include this token**, or they will be rejected with a `401 Unauthorized` error.
-
-Start the server:
+### Starting the server
 ```bash
-banana --api 4000
+banana --api         # default port 3000, localhost only
+banana --api 4000    # custom port
 ```
+
+> **`--no-auth`** flag disables token protection entirely. This is **deprecated and unsafe** — anyone on your network can execute arbitrary commands on your machine. Never use it in production.
+
+---
+
+### 🔐 API Security (Token Auth)
+The API server is protected by a **Secure API Token**.
+- A 32-character hex token is automatically generated on first start and stored at `~/.config/banana-code/token.json`.
+- **HTTP endpoints** require the token via `Authorization: Bearer <token>` header or `?token=<token>` query parameter.
+- **WebSocket connections** authenticate via an in-message handshake after connecting (see below).
+
+---
 
 ### HTTP Endpoints
-Endpoints require the token passed via the `Authorization: Bearer <token>` header or as a `?token=<token>` query parameter.
-- `GET /api/status`: Returns engine status, active provider, and model.
-- `GET /api/sessions`: Returns a JSON array of all saved chat sessions.
-- `GET /api/config`: Returns the current `config.json` preferences.
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/status` | Engine status, active provider, and model. |
+| `GET` | `/api/sessions` | JSON array of all saved chat sessions (metadata only, no message history). |
+| `GET` | `/api/config` | Current runtime configuration. |
+| `GET` | `/api/docs` | Internal `BANANA.md` documentation for the current workspace. |
 
-### WebSocket Streaming & Chat
-Connect a WebSocket client to `ws://localhost:4000?token=YOUR_TOKEN`.
+---
 
-**Send a chat message:**
+### WebSocket API
+
+Connect to `ws://localhost:<port>` (no token in the URL). After the connection opens, your **first message must be an auth handshake**:
+
 ```json
-{ "type": "chat", "text": "Run the sensors command" }
+{ "type": "auth", "token": "YOUR_TOKEN" }
 ```
 
-**Streamed Response Format:**
-...
-- `{"type": "tool_start", "tool": "execute_command"}`
-- `{"type": "done", "finalResponse": "..."}`
+**Success response:**
+```json
+{ "type": "auth_success" }
+```
 
-### Remote Tool Approval (Security)
-...
+**Failure response** (connection is then closed):
 ```json
-{"type":"permission_requested","ticketId":"5c9b2a...","action":"Execute Command","details":"sensors"}
+{ "type": "error", "message": "Unauthorized: Invalid token" }
 ```
-...
+
+All subsequent messages are only processed after a successful auth. Sending any other message type before authenticating will close the connection.
+
+---
+
+#### Message Reference
+
+All messages are JSON objects with a `type` field.
+
+##### 💬 Chat
+
+Send a message to the AI:
 ```json
-{"type":"permission_response","ticketId":"5c9b2a...","allowed":true,"session":true}
+{ "type": "chat", "text": "Refactor the login function" }
 ```
-...
-If an invalid `ticketId` is provided, Banana Code automatically blocks the tool execution to ensure safety.
+
+Streamed responses arrive as a sequence of events:
+| Event | Description |
+|-------|-------------|
+| `{"type": "chunk", "content": "..."}` | Streamed text token from the AI. |
+| `{"type": "tool_start", "tool": "write_file"}` | AI is invoking a tool. |
+| `{"type": "tool_end", "result": "..."}` | Tool execution finished. |
+| `{"type": "done", "finalResponse": "...", "usage": {...}}` | Full response complete. `usage` contains cost data if available. |
+
+Sessions are **automatically saved to disk** after every chat message.
+
+---
+
+##### ⚙️ Configuration
+
+Update runtime config (in-memory only):
+```json
+{ "type": "update_config", "config": { "model": "gpt-5.5", "yolo": false } }
+```
+
+To also persist the change to `config.json` on disk, add `"save": true`:
+```json
+{ "type": "update_config", "config": { "provider": "claude" }, "save": true }
+```
+
+If `provider` or `model` changes, the provider instance is automatically re-initialized while preserving conversation history.
+
+**Response:** `{ "type": "config_updated", "config": { ... } }`
+
+---
+
+##### 📁 Workspace
+
+Change the working directory:
+```json
+{ "type": "set_workspace", "path": "/home/user/my-project" }
+```
+
+**Response:** `{ "type": "workspace_updated", "path": "/home/user/my-project" }`
+
+---
+
+##### 💾 Sessions
+
+List saved sessions (metadata only):
+```json
+{ "type": "list_sessions" }
+```
+**Response:** `{ "type": "sessions_list", "sessions": [ { "uuid": "...", "title": "...", "updatedAt": "...", "provider": "...", "model": "..." } ] }`
+
+Load a session (restores provider and full message history):
+```json
+{ "type": "load_session", "sessionId": "SESSION_UUID" }
+```
+**Response:** `{ "type": "session_loaded", "sessionId": "...", "title": "...", "messages": [ ... ] }`
+
+---
+
+##### 🧠 Memory
+
+List all saved memories:
+```json
+{ "type": "list_memories" }
+```
+**Response:** `{ "type": "memories_list", "memories": [ ... ] }`
+
+Add a memory:
+```json
+{ "type": "add_memory", "fact": "User prefers TypeScript over JavaScript." }
+```
+**Response:** `{ "type": "memory_added", "id": "...", "fact": "..." }`
+
+Delete a memory:
+```json
+{ "type": "delete_memory", "id": "MEMORY_ID" }
+```
+**Response:** `{ "type": "memory_deleted", "id": "..." }`
+
+---
+
+##### 🗑️ History
+
+Clear the current conversation history (keeps system prompt):
+```json
+{ "type": "clear_history" }
+```
+**Response:** `{ "type": "history_cleared" }`
+
+Compress long conversation history into a short summary to save tokens:
+```json
+{ "type": "clean" }
+```
+**Response:** `{ "type": "clean_complete", "summary": "...", "messages": [ ... ] }`
+The compressed session is automatically saved to disk if a session is active.
+
+---
+
+##### 🍌 Project Init
+
+Generate a `BANANA.md` project summary for the current workspace:
+```json
+{ "type": "init" }
+```
+**Response:** `{ "type": "init_complete", "summary": "..." }`
+The provider instance is automatically re-initialized after creation so it picks up the new context file.
+
+---
+
+##### 🔑 Codex OAuth Login
+
+Trigger the OpenAI Codex browser-based OAuth login flow:
+```json
+{ "type": "trigger_codex_login" }
+```
+
+Immediate response (check your terminal to complete login in the browser):
+```json
+{ "type": "codex_login_started", "message": "Please check your terminal to complete the OpenAI login." }
+```
+
+Final response when login completes:
+```json
+{ "type": "codex_login_finished", "success": true }
+```
+
+---
+
+##### 🛡️ Remote Tool Approval
+
+When the AI needs to execute a tool that requires permission, the server sends:
+```json
+{ "type": "permission_requested", "ticketId": "5c9b2a...", "action": "Execute Command", "details": "rm -rf dist/" }
+```
+
+Your client must respond with the matching `ticketId`:
+```json
+{ "type": "permission_response", "ticketId": "5c9b2a...", "allowed": true, "session": true }
+```
+
+- `"allowed": false` blocks the action.
+- `"session": true` remembers the decision for the rest of the session.
+- Responding with an invalid or unknown `ticketId` is automatically blocked for safety.
+
+---
+
+##### ❌ Error Response
+
+All errors follow a consistent format:
+```json
+{ "type": "error", "message": "Description of what went wrong." }
+```
 
 ## 🐛 Known Issues
 
@@ -355,8 +525,3 @@ Made with 🍌 by [banaxi](https://github.com/banaxi-tech)
 Banana Code is an independent open-source project and is not affiliated with, endorsed by, or sponsored by OpenAI, Google, Anthropic, or any other AI provider. 
 
 This tool provides an interface to access services you already have permission to use. Users are responsible for complying with the Terms of Service of their respective AI providers. Use of experimental or internal endpoints is at the user's own risk.
-risk.
- at the user's own risk.
-of experimental or internal endpoints is at the user's own risk.
-risk.
- at the user's own risk.

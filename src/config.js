@@ -17,6 +17,9 @@ export async function loadConfig() {
         return JSON.parse(data);
     } catch (error) {
         if (error.code === 'ENOENT') {
+            if (process.argv.includes('--api')) {
+                return { provider: null, model: null, isInitialApiSetup: true };
+            }
             return await runSetupWizard();
         }
         throw error;
@@ -26,7 +29,9 @@ export async function loadConfig() {
 export async function saveConfig(config) {
     try {
         await fs.mkdir(CONFIG_DIR, { recursive: true });
-        await fs.writeFile(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8');
+        // Strip transient API flags before saving to disk
+        const { isApiMode, onChunk, onToolStart, onToolEnd, ...persistentConfig } = config;
+        await fs.writeFile(CONFIG_FILE, JSON.stringify(persistentConfig, null, 2), 'utf-8');
     } catch (error) {
         console.error(chalk.red("Failed to save config:"), error);
     }

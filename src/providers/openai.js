@@ -524,7 +524,9 @@ export class OpenAIProvider {
                                     if (currentEvent === 'response.output_text.delta') {
                                         if (spinner && spinner.isSpinning && !this.config.useMarkedTerminal) spinner.stop();
                                         if (!this.config.useMarkedTerminal) {
-                                            if (!this.config.isApiMode) {
+                                            if (this.config.isApiMode && this.onChunk) {
+                                                this.onChunk(data.delta);
+                                            } else if (!this.config.isApiMode) {
                                                 process.stdout.write(chalk.cyan(data.delta));
                                             }
                                         }

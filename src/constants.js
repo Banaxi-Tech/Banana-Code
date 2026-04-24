@@ -43,7 +43,9 @@ export const MISTRAL_MODELS = [
 ];
 
 export const CODEX_MODELS = [
-    { name: 'GPT-5.4 (Newest)', value: 'gpt-5.4' },
+    { name: 'GPT-5.5 (Newest)', value: 'gpt-5.5' },
+    { name: 'GPT-5.4', value: 'gpt-5.4' },
+    { name: 'GPT-5.4 mini', value: 'gpt-5.4-mini' },
     { name: 'GPT-5.3 Codex', value: 'gpt-5.3-codex' },
     { name: 'GPT-5.2 (General, Cheapest)', value: 'gpt-5.2' }
 ];

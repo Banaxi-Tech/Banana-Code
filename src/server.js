@@ -8,7 +8,7 @@ import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
 import { loadConfig } from './config.js';
-import { listSessions, loadSession } from './sessions.js';
+import { listSessions, loadSession, saveSession, generateSessionId } from './sessions.js';
 
 export async function startApiServer(port = 3000, createProvider, host = '127.0.0.1', noAuth = false) {
     if (noAuth) {
@@ -32,8 +32,9 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
             console.log(chalk.green.bold(`\n=================================================`));
             console.log(chalk.green.bold(`🔑 FIRST START: API Token Generated!`));
             console.log(chalk.green.bold(`Your API Token is: `) + chalk.cyan.bold(apiToken));
-            console.log(chalk.yellow(`Save this token. You must pass it to connect:`));
-            console.log(chalk.yellow(`ws://${host}:${port}?token=${apiToken}`));
+            console.log(chalk.yellow(`Save this token. You must pass it after connecting via WebSocket:`));
+            console.log(chalk.yellow(`ws://${host}:${port}`));
+            console.log(chalk.yellow(`And send JSON: { "type": "auth", "token": "${apiToken}" }`));
             console.log(chalk.green.bold(`=================================================\n`));
         } else {
             console.error(chalk.red(`Failed to read token file: ${err.message}`));
@@ -63,20 +64,13 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
 
     // WebSocket connection handling
     wss.on('connection', (ws, req) => {
-        // Verify token in WebSocket connection URL
-        const url = new URL(req.url, `http://${req.headers.host}`);
-        const token = url.searchParams.get('token');
-        
-        if (!noAuth && token !== apiToken) {
-            console.log(chalk.red(`[API] WebSocket connection rejected: Invalid or missing token`));
-            ws.close(1008, 'Unauthorized'); // 1008 Policy Violation
-            return;
-        }
+        let isAuthenticated = noAuth;
 
-        console.log(chalk.cyan(`[API] GUI Client connected via WebSocket ${noAuth ? '(UNSECURE - no-auth)' : '(Authenticated)'}`));
+        console.log(chalk.cyan(`[API] GUI Client connected via WebSocket ${noAuth ? '(UNSECURE - no-auth)' : '(Pending Authentication)'}`));
 
         const activeTickets = new Set();
         let currentWorkspace = process.cwd();
+        let currentSessionId = null;
 
         // Setup session-scoped permission handler for API mode
         const sessionPermissionHandler = (ticketId, actionType, details) => {
@@ -120,6 +114,19 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
             try {
                 const data = JSON.parse(message);
                 
+                if (!isAuthenticated) {
+                    if (data.type === 'auth' && data.token === apiToken) {
+                        isAuthenticated = true;
+                        console.log(chalk.green(`[API] WebSocket client authenticated successfully`));
+                        ws.send(JSON.stringify({ type: 'auth_success' }));
+                    } else {
+                        console.log(chalk.red(`[API] WebSocket authentication failed: Invalid token`));
+                        ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized: Invalid token' }));
+                        ws.close(1008, 'Unauthorized');
+                    }
+                    return;
+                }
+
                 // Ignore valid permission responses here, they are handled by the specific ticket listeners
                 if (data.type === 'permission_response') {
                     if (!activeTickets.has(data.ticketId)) {
@@ -154,12 +161,226 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                 }
 
                 if (data.type === 'update_config') {
+                    const oldProvider = config.provider;
+                    const oldModel = config.model;
+
                     config = { ...config, ...data.config };
-                    if (providerInstance) {
+                    
+                    // If provider or model changed, force re-initialization of the provider instance
+                    if (providerInstance && (data.config.provider || data.config.model)) {
+                        const savedMessages = providerInstance.messages;
+                        providerInstance = createProvider(config);
+                        providerInstance.messages = savedMessages;
+                    } else if (providerInstance) {
                         providerInstance.config = { ...providerInstance.config, ...data.config };
                     }
-                    console.log(chalk.cyan(`[API] Configuration updated.`));
+
+                    // Always refresh the system prompt to reflect potential style/emoji/mode changes
+                    if (providerInstance && typeof providerInstance.updateSystemPrompt === 'function') {
+                        const { getSystemPrompt } = await import('./prompt.js');
+                        const newSysPrompt = getSystemPrompt(config);
+                        providerInstance.updateSystemPrompt(newSysPrompt);
+                    }
+
+                    if (data.save) {
+                        const { saveConfig } = await import('./config.js');
+                        await saveConfig(config);
+                        console.log(chalk.cyan(`[API] Configuration updated and saved to disk.`));
+                    } else {
+                        console.log(chalk.cyan(`[API] Configuration updated (in-memory only).`));
+                    }
+
+                    // Sync global YOLO state if changed
+                    if (data.config.yolo !== undefined) {
+                        const { setYoloMode } = await import('./permissions.js');
+                        setYoloMode(data.config.yolo);
+                        console.log(chalk.bgRed.white.bold(data.config.yolo ? '\n [API] YOLO MODE ENABLED - Auto-accepting all permissions! \n' : '\n [API] YOLO mode disabled.\n'));
+                    }
+
                     ws.send(JSON.stringify({ type: 'config_updated', config }));
+                    return;
+                }
+
+                if (data.type === 'list_sessions') {
+                    const allSessions = await listSessions();
+                    // Strip out full messages to keep the list small
+                    const sessions = allSessions.map(s => ({
+                        uuid: s.uuid,
+                        title: s.title,
+                        updatedAt: s.updatedAt,
+                        provider: s.provider,
+                        model: s.model
+                    }));
+                    ws.send(JSON.stringify({ type: 'sessions_list', sessions }));
+                    return;
+                }
+
+                if (data.type === 'load_session') {
+                    const session = await loadSession(data.sessionId);
+                    if (!session) {
+                        ws.send(JSON.stringify({ type: 'error', message: `Session ${data.sessionId} not found.` }));
+                        return;
+                    }
+
+                    // Re-init provider with the session's config and history
+                    config.provider = session.provider || config.provider;
+                    config.model = session.model || config.model;
+                    
+                    providerInstance = createProvider(config);
+                    providerInstance.messages = session.messages || [];
+                    currentSessionId = data.sessionId;
+                    
+                    console.log(chalk.cyan(`[API] Loaded session: ${session.title || data.sessionId}`));
+                    ws.send(JSON.stringify({ 
+                        type: 'session_loaded', 
+                        sessionId: data.sessionId,
+                        title: session.title,
+                        messages: session.messages 
+                    }));
+                    return;
+                }
+
+                if (data.type === 'list_memories') {
+                    const { loadMemory } = await import('./utils/memory.js');
+                    const memories = await loadMemory();
+                    ws.send(JSON.stringify({ type: 'memories_list', memories }));
+                    return;
+                }
+
+                if (data.type === 'add_memory') {
+                    const { addMemory } = await import('./utils/memory.js');
+                    const id = await addMemory(data.fact);
+                    console.log(chalk.magenta(`[API] Manual memory added: ${id}`));
+                    ws.send(JSON.stringify({ type: 'memory_added', id, fact: data.fact }));
+                    return;
+                }
+
+                if (data.type === 'delete_memory') {
+                    const { removeMemory } = await import('./utils/memory.js');
+                    const success = await removeMemory(data.id);
+                    if (success) {
+                        console.log(chalk.magenta(`[API] Manual memory deleted: ${data.id}`));
+                        ws.send(JSON.stringify({ type: 'memory_deleted', id: data.id }));
+                    } else {
+                        ws.send(JSON.stringify({ type: 'error', message: `Memory ID ${data.id} not found.` }));
+                    }
+                    return;
+                }
+
+                if (data.type === 'clear_history') {
+                    if (providerInstance) {
+                        providerInstance.messages = [{ role: 'system', content: providerInstance.systemPrompt }];
+                        console.log(chalk.cyan(`[API] Conversation history cleared.`));
+                        ws.send(JSON.stringify({ type: 'history_cleared' }));
+                    }
+                    return;
+                }
+
+                if (data.type === 'init') {
+                    console.log(chalk.cyan(`[API] Generating project summary for BANANA.md...`));
+                    try {
+                        const { getWorkspaceTree } = await import('./utils/workspace.js');
+                        const tree = await getWorkspaceTree();
+
+                        const initProvider = createProvider(config);
+                        initProvider.messages = [];
+
+                        let initPrompt = "SYSTEM: You are a project summarizer. Review the following project file tree and briefly describe what this project is, what technologies it uses, and any obvious conventions. Keep it under 2 paragraphs. Output ONLY the summary text.";
+                        initPrompt += `\n\n--- Project Tree ---\n${tree}`;
+
+                        const summary = await initProvider.sendMessage(initPrompt);
+
+                        const fsModule = await import('fs/promises');
+                        const pathModule = await import('path');
+                        const bananaPath = pathModule.join(process.cwd(), 'BANANA.md');
+                        await fsModule.writeFile(bananaPath, summary, 'utf8');
+
+                        console.log(chalk.green(`[API] Successfully created BANANA.md!`));
+
+                        // Re-init current provider so it picks up the new BANANA.md
+                        providerInstance = createProvider(config);
+                        
+                        ws.send(JSON.stringify({ type: 'init_complete', summary }));
+                    } catch (err) {
+                        console.log(chalk.red(`[API] Failed to initialize project: ${err.message}`));
+                        ws.send(JSON.stringify({ type: 'error', message: `Failed to initialize project: ${err.message}` }));
+                    }
+                    return;
+                }
+
+                if (data.type === 'clean') {
+                    if (!providerInstance || !providerInstance.messages || providerInstance.messages.length <= 2) {
+                        console.log(chalk.yellow(`[API] Not enough history to summarize.`));
+                        ws.send(JSON.stringify({ type: 'error', message: "Not enough history to summarize." }));
+                        return;
+                    }
+
+                    console.log(chalk.cyan(`[API] Summarizing context to save tokens...`));
+                    try {
+                        const summaryPrompt = "SYSTEM INSTRUCTION: Please provide a highly concise summary of our entire conversation so far. Focus ONLY on the overall goal, the current state of the project, any important decisions made, and what we were about to do next. Do not include pleasantries. This summary will be used as your memory going forward.";
+                        
+                        // Prevent sending chunk events back to the GUI for the summary request
+                        const originalOnChunk = providerInstance.onChunk;
+                        providerInstance.onChunk = null;
+                        
+                        const summary = await providerInstance.sendMessage(summaryPrompt);
+                        
+                        // Restore original onChunk
+                        providerInstance.onChunk = originalOnChunk;
+
+                        providerInstance.messages = [
+                            { role: 'system', content: providerInstance.systemPrompt },
+                            { role: 'user', content: `We are resuming a conversation. Here is the summary of what has happened so far:\n\n${summary}\n\nLet's continue from here.` },
+                            { role: 'assistant', content: "Understood. I have the context and am ready to proceed." }
+                        ];
+
+                        console.log(chalk.green(`[API] History compressed successfully.`));
+                        
+                        // Save the compressed session to disk
+                        if (currentSessionId) {
+                            await saveSession(currentSessionId, {
+                                messages: providerInstance.messages,
+                                provider: config.provider,
+                                model: config.model,
+                                title: "Compressed Session" // or keep existing
+                            });
+                        }
+
+                        ws.send(JSON.stringify({ type: 'clean_complete', summary, messages: providerInstance.messages }));
+                    } catch (err) {
+                        console.error(chalk.red(`[API] Failed to compress history: ${err.message}`));
+                        ws.send(JSON.stringify({ type: 'error', message: `Failed to compress history: ${err.message}` }));
+                    }
+                    return;
+                }
+
+                if (data.type === 'trigger_codex_login') {
+                    const { spawn } = await import('child_process');
+                    console.log(chalk.cyan(`[API] Triggering Codex OAuth login...`));
+                    
+                    // Use spawn instead of exec to allow the browser to open and the process to persist
+                    const loginProcess = spawn('npx', ['-y', '@openai/codex', 'login'], {
+                        stdio: 'inherit',
+                        detached: true
+                    });
+
+                    loginProcess.on('close', (code) => {
+                        if (code !== 0) {
+                            console.error(chalk.red(`[API] Codex login process exited with code ${code}`));
+                            ws.send(JSON.stringify({ type: 'codex_login_finished', success: false, error: `Process exited with code ${code}` }));
+                        } else {
+                            const authFile = path.join(os.homedir(), '.codex', 'auth.json');
+                            // Check if file exists using fs.access
+                            fs.access(authFile).then(() => {
+                                console.log(chalk.green(`[API] Codex login successful.`));
+                                ws.send(JSON.stringify({ type: 'codex_login_finished', success: true }));
+                            }).catch(() => {
+                                ws.send(JSON.stringify({ type: 'codex_login_finished', success: false, error: 'Auth file not created.' }));
+                            });
+                        }
+                    });
+                    
+                    ws.send(JSON.stringify({ type: 'codex_login_started', message: 'Please check your terminal to complete the OpenAI login.' }));
                     return;
                 }
 
@@ -202,6 +423,16 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                     const response = await providerInstance.sendMessage(data.text);
                     console.log(chalk.gray(`[API] AI response complete.`));
                     
+                    // Save the session to disk
+                    if (!currentSessionId) currentSessionId = generateSessionId();
+                    
+                    await saveSession(currentSessionId, {
+                        messages: providerInstance.messages,
+                        provider: config.provider,
+                        model: config.model,
+                        title: data.text.substring(0, 50) + (data.text.length > 50 ? '...' : '')
+                    });
+
                     let financial = null;
                     if (typeof providerInstance.calculateSessionCost === 'function') {
                         financial = providerInstance.calculateSessionCost();

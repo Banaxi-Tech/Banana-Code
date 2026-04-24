@@ -5,7 +5,9 @@ export const AUTO_MODEL_DESCRIPTIONS = {
     'gpt-5.4-mini':         'Fast and cheap GPT-5.4 variant. Great for simple questions, quick fixes, low-complexity work.',
     'gpt-5.3-instant':      'Quick responses with good quality. Balanced for most everyday coding and Q&A tasks.',
     // OpenAI Codex (OAuth)
-    'gpt-5.4':              'Most capable OpenAI model (2026 Janury knowledge). Best for complex reasoning, hard coding problems, architecture design.',
+    'gpt-5.5':              'Most capable OpenAI model. Best for complex reasoning, hard coding problems, architecture design.',
+    'gpt-5.4':              'Highly capable OpenAI model. Great for complex reasoning and coding.',
+    'gpt-5.4-mini':         'Fast and cheap GPT-5.4 variant. Great for simple questions, quick fixes, low-complexity work.',
     'gpt-5.3-codex':        'Strong coding model (2026). Excellent for code generation, review, and software engineering.',
     'gpt-5.2':              'General purpose GPT-5.2. Good balance of capability and speed. Cheapest OAuth option.',
     // Claude
