@@ -35,6 +35,52 @@ export class OpenAIProvider {
         }));
     }
 
+    /**
+     * Repair dangling tool_calls in message history.
+     * When the process is interrupted (Ctrl+C) mid-tool-execution, the messages
+     * array can end up with assistant messages containing tool_calls that have
+     * no matching tool-result messages. OpenAI's API rejects these with HTTP 400.
+     * This method scans the ENTIRE history and removes any orphaned assistant
+     * messages (+ any partial tool results that belong to them).
+     */
+    repairDanglingToolCalls() {
+        // Walk backwards so splice indices stay valid
+        for (let i = this.messages.length - 1; i >= 0; i--) {
+            const msg = this.messages[i];
+            if (msg.role === 'assistant' && msg.tool_calls?.length) {
+                const idsNeeded = msg.tool_calls.map(tc => tc.id);
+                // Collect all tool results that appear after this assistant message
+                const idsFulfilled = new Set();
+                for (let j = i + 1; j < this.messages.length; j++) {
+                    if (this.messages[j].role === 'tool' && idsNeeded.includes(this.messages[j].tool_call_id)) {
+                        idsFulfilled.add(this.messages[j].tool_call_id);
+                    }
+                }
+                const missing = idsNeeded.filter(id => !idsFulfilled.has(id));
+                if (missing.length > 0) {
+                    // Remove the orphaned assistant message and any partial tool
+                    // results that belong to it (they are useless without the
+                    // full set).
+                    const toRemove = new Set([i]);
+                    for (let j = i + 1; j < this.messages.length; j++) {
+                        if (this.messages[j].role === 'tool' && idsNeeded.includes(this.messages[j].tool_call_id)) {
+                            toRemove.add(j);
+                        } else if (this.messages[j].role !== 'tool') {
+                            break; // stop once we leave the tool-result block
+                        }
+                    }
+                    // Remove in reverse order to preserve indices
+                    for (const idx of [...toRemove].sort((a, b) => b - a)) {
+                        this.messages.splice(idx, 1);
+                    }
+                    // After removing, re-check from the same position in case
+                    // there are more orphaned messages above
+                    i = Math.min(i, this.messages.length);
+                }
+            }
+        }
+    }
+
     updateSystemPrompt(newPrompt) {
         this.systemPrompt = newPrompt;
         if (this.messages.length > 0 && this.messages[0].role === 'system') {
@@ -194,6 +240,9 @@ export class OpenAIProvider {
         let finalResponse = '';
 
         try {
+            // Repair any orphaned tool_calls from previous interrupted runs
+            this.repairDanglingToolCalls();
+
             while (true) {
                 let stream = null;
                 try {
@@ -322,20 +371,7 @@ export class OpenAIProvider {
             if (spinner && spinner.isSpinning) spinner.stop();
 
             // Repair dangling tool_calls in history
-            for (let i = this.messages.length - 1; i >= 0; i--) {
-                const msg = this.messages[i];
-                if (msg.role === 'assistant' && msg.tool_calls?.length) {
-                    const idsNeeded = msg.tool_calls.map(tc => tc.id);
-                    const idsFulfilled = this.messages.slice(i + 1)
-                        .filter(m => m.role === 'tool')
-                        .map(m => m.tool_call_id);
-                    const missing = idsNeeded.filter(id => !idsFulfilled.includes(id));
-                    if (missing.length > 0) {
-                        this.messages.splice(i, 1); // remove the orphaned assistant message
-                    }
-                    break;
-                }
-            }
+            this.repairDanglingToolCalls();
 
             if (!this.config.isApiMode) {
                 console.error(chalk.red(`OpenAI Runtime Error: ${err.message}`));
@@ -459,6 +495,9 @@ export class OpenAIProvider {
         let finalResponse = '';
 
         try {
+            // Repair any orphaned tool_calls from previous interrupted runs
+            this.repairDanglingToolCalls();
+
             while (true) {
                 const backendInput = mapMessagesToBackend(this.messages);
                 if (this.config.debug) {
@@ -678,20 +717,7 @@ export class OpenAIProvider {
             if (spinner && spinner.isSpinning) spinner.stop();
 
             // Repair dangling tool_calls in history
-            for (let i = this.messages.length - 1; i >= 0; i--) {
-                const msg = this.messages[i];
-                if (msg.role === 'assistant' && msg.tool_calls?.length) {
-                    const idsNeeded = msg.tool_calls.map(tc => tc.id);
-                    const idsFulfilled = this.messages.slice(i + 1)
-                        .filter(m => m.role === 'tool')
-                        .map(m => m.tool_call_id);
-                    const missing = idsNeeded.filter(id => !idsFulfilled.includes(id));
-                    if (missing.length > 0) {
-                        this.messages.splice(i, 1); // remove the orphaned assistant message
-                    }
-                    break;
-                }
-            }
+            this.repairDanglingToolCalls();
 
             if (!this.config.isApiMode) {
                 console.error(chalk.red(`OpenAI Codex Error: ${err.message}`));

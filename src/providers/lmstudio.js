@@ -184,6 +184,7 @@ export class LMStudioProvider {
             return finalResponse;
         } catch (err) {
             if (spinner && spinner.isSpinning) spinner.stop();
+            
             if (!this.config.isApiMode) {
                 console.error(chalk.red(`LM Studio Runtime Error: ${err.message}`));
             }

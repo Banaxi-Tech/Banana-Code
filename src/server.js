@@ -197,6 +197,9 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                         console.log(chalk.bgRed.white.bold(data.config.yolo ? '\n [API] YOLO MODE ENABLED - Auto-accepting all permissions! \n' : '\n [API] YOLO mode disabled.\n'));
                     }
 
+                    // Keep global config in sync so permissions module reads live state
+                    global.bananaConfig = config;
+
                     ws.send(JSON.stringify({ type: 'config_updated', config }));
                     return;
                 }
