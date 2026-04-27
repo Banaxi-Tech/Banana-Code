@@ -253,6 +253,48 @@ description: Use this skill whenever you are asked to build or edit a React comp
 ```
 3. Type `/skills` in Banana Code to verify it loaded. The AI will now follow these rules automatically!
 
+### 🔌 Plugin System (Beta)
+Banana Code features a robust, NPM-based plugin architecture that allows you to extend the CLI's core functionality without modifying the source code. Plugins are installed in a secure sandbox at `~/.config/banana-code/plugins/`.
+
+#### Managing Plugins
+- **`/plugin add <package-name>`**: Install a plugin from NPM.
+- **`/plugin remove <package-name>`**: Uninstall a plugin.
+- **`/plugin list`**: Show all currently active plugins.
+
+#### Developing a Plugin
+A plugin is a standard NPM package that exports a default initialization function. This function receives a `BananaAPI` object used to register new features.
+
+**Example `index.js`:**
+```javascript
+export default function init(api) {
+    // Add a custom provider
+    api.registerProvider('my-llm', 'My Custom LLM', class MyProvider {
+        constructor(config) { this.messages = []; }
+        async sendMessage(input) { return "Hello from plugin!"; }
+        static async getModels() { return [{ name: 'Model 1', value: 'm1' }]; }
+    });
+
+    // Add a custom slash command
+    api.registerCommand('/hello', 'Say hello', (args) => {
+        console.log("Hello from the plugin command!");
+    });
+
+    // Intercept messages
+    api.onBeforeMessage(({ text, images }) => {
+        return { text: text.replace(/apple/g, 'banana') };
+    });
+}
+```
+
+#### Available API Hooks:
+| Hook | Description |
+|------|-------------|
+| `registerProvider(id, name, Class)` | Add a new LLM provider to the `/provider` menu. |
+| `registerCommand(name, desc, handler)` | Add a new slash command to the CLI. |
+| `registerTool(definition, execute)` | Add a new AI tool (capability) to the agent. |
+| `onBeforeMessage(fn)` | Modify user input or attached images before sending to AI. |
+| `onAfterMessage(fn)` | Modify the AI response text before it is stored in history. |
+
 ### 🔌 Model Context Protocol (MCP) Support
 Banana Code supports the open standard [Model Context Protocol](https://modelcontextprotocol.io/), allowing you to plug in community-built servers to give your AI access to your databases, GitHub, Slack, Google Maps, and more.
 

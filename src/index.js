@@ -21,6 +21,7 @@ import { printMarkdown } from './utils/markdown.js';
 import { estimateConversationTokens } from './utils/tokens.js';
 import { mcpManager } from './utils/mcp.js';
 import { startApiServer } from './server.js';
+import { loadPlugins, pluginRegistry, installPlugin, removePlugin, getConfiguredPlugins } from './utils/plugins.js';
 
 let config;
 let providerInstance;
@@ -39,6 +40,13 @@ let currentInputSaved = '';
 
 function createProvider(overrideConfig = null) {
     const activeConfig = overrideConfig || config;
+    
+    // Check dynamic plugins first
+    if (pluginRegistry.providers[activeConfig.provider]) {
+        const ProviderClass = pluginRegistry.providers[activeConfig.provider].ProviderClass;
+        return new ProviderClass(activeConfig);
+    }
+
     switch (activeConfig.provider) {
         case 'gemini': return new GeminiProvider(activeConfig);
         case 'claude': return new ClaudeProvider(activeConfig);
@@ -58,29 +66,48 @@ function createProvider(overrideConfig = null) {
 async function handleSlashCommand(command) {
     const [cmd, ...args] = command.split(' ');
 
+    if (pluginRegistry.commands[cmd]) {
+        try {
+            await pluginRegistry.commands[cmd].handler(args, config, providerInstance);
+        } catch (e) {
+            console.log(chalk.red(`Plugin command ${cmd} failed: ${e.message}`));
+        }
+        return;
+    }
+
     switch (cmd) {
         case '/provider':
             let newProv = args[0];
             if (!newProv) {
                 const { select } = await import('@inquirer/prompts');
+                const defaultChoices = [
+                    { name: 'Google Gemini', value: 'gemini' },
+                    { name: 'Anthropic Claude', value: 'claude' },
+                    { name: 'OpenAI', value: 'openai' },
+                    { name: 'Mistral AI', value: 'mistral' },
+                    { name: 'OpenRouter (Any Model)', value: 'openrouter' },
+                    { name: 'Ollama Cloud', value: 'ollama_cloud' },
+                    { name: 'Ollama (Local)', value: 'ollama' },
+                    { name: 'LM Studio (Local)', value: 'lmstudio' }
+                ];
+                
+                // Add dynamic plugin providers
+                for (const [id, prov] of Object.entries(pluginRegistry.providers)) {
+                    defaultChoices.push({ name: `${prov.name} (Plugin)`, value: id });
+                }
+
                 newProv = await select({
                     message: 'Select an AI provider:',
-                    choices: [
-                        { name: 'Google Gemini', value: 'gemini' },
-                        { name: 'Anthropic Claude', value: 'claude' },
-                        { name: 'OpenAI', value: 'openai' },
-                        { name: 'Mistral AI', value: 'mistral' },
-                        { name: 'OpenRouter (Any Model)', value: 'openrouter' },
-                        { name: 'Ollama Cloud', value: 'ollama_cloud' },
-                        { name: 'Ollama (Local)', value: 'ollama' },
-                        { name: 'LM Studio (Local)', value: 'lmstudio' }
-                    ],
+                    choices: defaultChoices,
                     loop: false,
-                    pageSize: 10
+                    pageSize: 15
                 });
             }
 
-            if (['gemini', 'claude', 'openai', 'mistral', 'openrouter', 'ollama_cloud', 'ollama', 'lmstudio'].includes(newProv)) {
+            const isDefaultProv = ['gemini', 'claude', 'openai', 'mistral', 'openrouter', 'ollama_cloud', 'ollama', 'lmstudio'].includes(newProv);
+            const isPluginProv = pluginRegistry.providers[newProv] !== undefined;
+
+            if (isDefaultProv || isPluginProv) {
                 // Use the shared setup logic to get keys/models
                 config = await setupProvider(newProv, config);
                 await saveConfig(config);
@@ -133,6 +160,18 @@ async function handleSlashCommand(command) {
                     } catch (e) {
                         console.log(chalk.red("Could not connect to LM Studio."));
                         return;
+                    }
+                } else if (pluginRegistry.providers[config.provider] && pluginRegistry.providers[config.provider].ProviderClass) {
+                    // Check if provider class has a static getModels method
+                    const ProvClass = pluginRegistry.providers[config.provider].ProviderClass;
+                    if (typeof ProvClass.getModels === 'function') {
+                        try {
+                            choices = await ProvClass.getModels(config);
+                        } catch (e) {
+                            console.log(chalk.red(`Could not fetch models for plugin provider ${config.provider}: ${e.message}`));
+                        }
+                    } else {
+                        choices = [{ name: 'Default Model', value: 'default' }];
                     }
                 }
 
@@ -870,6 +909,41 @@ async function handleSlashCommand(command) {
                 console.log(chalk.red(`Failed to initialize project: ${err.message}`));
             }
             break;
+        case '/plugin': {
+            const subCmd = args[0];
+            if (subCmd === 'add' || subCmd === 'install') {
+                const pkg = args[1];
+                if (!pkg) {
+                    console.log(chalk.yellow("Usage: /plugin add <npm-package-name>"));
+                    break;
+                }
+                const success = await installPlugin(pkg);
+                if (success) {
+                    console.log(chalk.green(`\nPlease restart Banana Code to fully load the new plugin.`));
+                }
+            } else if (subCmd === 'remove' || subCmd === 'uninstall') {
+                const pkg = args[1];
+                if (!pkg) {
+                    console.log(chalk.yellow("Usage: /plugin remove <npm-package-name>"));
+                    break;
+                }
+                const success = await removePlugin(pkg);
+                if (success) {
+                    console.log(chalk.green(`\nPlease restart Banana Code to complete removal.`));
+                }
+            } else if (subCmd === 'list') {
+                const plugins = getConfiguredPlugins();
+                if (plugins.length === 0) {
+                    console.log(chalk.yellow("No plugins are currently installed."));
+                } else {
+                    console.log(chalk.cyan.bold("\nInstalled Plugins:"));
+                    plugins.forEach(p => console.log(chalk.green(`- ${p}`)));
+                }
+            } else {
+                console.log(chalk.yellow("Usage: /plugin <add|remove|list> [package-name]"));
+            }
+            break;
+        }
         case '/help':
             console.log(chalk.yellow(`
 Available commands:
@@ -895,9 +969,16 @@ Available commands:
   /emoji           - Change AI emoji usage (Normal, Minimal, More)
   /effort          - Change Claude reasoning effort (low, medium, high, xhigh, max)
   /debug           - Toggle debug mode (show tool results)
+  /plugin          - Manage plugins (add, remove, list)
   /help            - Show all commands
   /exit            - Quit Banana Code
 `));
+            if (Object.keys(pluginRegistry.commands).length > 0) {
+                console.log(chalk.cyan(`\nPlugin Commands:`));
+                for (const [cmdName, cmdInfo] of Object.entries(pluginRegistry.commands)) {
+                    console.log(chalk.cyan(`  ${cmdName.padEnd(16)} - ${cmdInfo.description}`));
+                }
+            }
             break;
         case '/exit':
             console.log(chalk.yellow(`\nTo resume this session: node bin/banana.js --resume ${currentSessionId}`));
@@ -1403,6 +1484,7 @@ async function main() {
         setYoloMode(config.yolo);
 
         await runStartup();
+        await loadPlugins();
 
         if (config.betaTools && config.betaTools.includes('mcp_support')) {
             await mcpManager.init();
@@ -1570,8 +1652,37 @@ async function main() {
                     }
                 }
 
+                // Execute onBeforeMessage lifecycle hooks
+                let modifiedInput = finalInput;
+                for (const hook of pluginRegistry.lifecycleHooks.onBeforeMessage) {
+                    try {
+                        const res = await hook({ text: modifiedInput, images: attachedImages }, config);
+                        if (res !== undefined) {
+                            if (typeof res === 'object' && res !== null) {
+                                if (res.text !== undefined) modifiedInput = res.text;
+                                if (res.images !== undefined) attachedImages = res.images;
+                            } else {
+                                modifiedInput = String(res);
+                            }
+                        }
+                    } catch (e) {
+                        console.log(chalk.yellow(`Warning: Plugin onBeforeMessage hook failed: ${e.message}`));
+                    }
+                }
+
                 process.stdout.write(chalk.cyan('✦ '));
-                await providerInstance.sendMessage({ text: finalInput, images: attachedImages });
+                let responseText = await providerInstance.sendMessage({ text: modifiedInput, images: attachedImages });
+                
+                // Execute onAfterMessage lifecycle hooks
+                for (const hook of pluginRegistry.lifecycleHooks.onAfterMessage) {
+                    try {
+                        const res = await hook(responseText, config);
+                        if (res !== undefined) responseText = res;
+                    } catch (e) {
+                        console.log(chalk.yellow(`Warning: Plugin onAfterMessage hook failed: ${e.message}`));
+                    }
+                }
+
                 console.log(); // Extra newline after AI response
 
                 // Auto-generate title every 10 messages (or on the 3rd message)

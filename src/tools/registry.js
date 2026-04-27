@@ -16,6 +16,7 @@ import { delegateTask } from './delegateTask.js';
 import { renameFile } from './renameFile.js';
 import { mcpManager } from '../utils/mcp.js';
 import { saveMemoryTool, listMemoryTool, deleteMemoryTool } from './memoryTools.js';
+import { pluginRegistry } from '../utils/plugins.js';
 
 export const TOOLS = [
     {
@@ -331,6 +332,11 @@ export function getAvailableTools(config = {}) {
         available = available.concat(mcpTools);
     }
 
+    // Add dynamically registered plugin tools
+    for (const [name, toolObj] of Object.entries(pluginRegistry.tools)) {
+        available.push(toolObj.definition);
+    }
+
     return available;
 }
 
@@ -365,6 +371,15 @@ export async function executeTool(name, args, config) {
         const mcpTools = mcpManager.getTools();
         if (mcpTools.some(t => t.name === name)) {
             return await mcpManager.callTool(name, args);
+        }
+    }
+
+    // Check if it's a plugin tool
+    if (pluginRegistry.tools[name]) {
+        try {
+            return await pluginRegistry.tools[name].execute(args, config);
+        } catch (e) {
+            return `Plugin tool execution failed: ${e.message}`;
         }
     }
 

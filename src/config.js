@@ -7,6 +7,7 @@ import fsSync from 'fs';
 import chalk from 'chalk';
 
 import { GEMINI_MODELS, CLAUDE_MODELS, OPENAI_MODELS, CODEX_MODELS, OLLAMA_CLOUD_MODELS, MISTRAL_MODELS } from './constants.js';
+import { pluginRegistry } from './utils/plugins.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.config', 'banana-code');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
@@ -263,6 +264,26 @@ export async function setupProvider(provider, config = {}) {
         } catch (error) {
             console.log(chalk.red("Could not connect to Ollama at localhost:11434."));
             config.model = await input({ message: 'Fallback model name to configure:', default: config.model || 'llama3' });
+        }
+    } else if (pluginRegistry.providers[provider]) {
+        const ProvClass = pluginRegistry.providers[provider].ProviderClass;
+        // If the plugin implements a custom setup wizard, let it take over
+        if (typeof ProvClass.setup === 'function') {
+            config = await ProvClass.setup(config);
+        } else if (typeof ProvClass.getModels === 'function') {
+            // Otherwise just prompt for a model if it provides a list of models
+            try {
+                const choices = await ProvClass.getModels(config);
+                if (choices && choices.length > 0) {
+                    config.model = await select({
+                        message: `Select a model for ${pluginRegistry.providers[provider].name}:`,
+                        choices,
+                        default: config.model
+                    });
+                }
+            } catch (e) {
+                console.log(chalk.red(`Failed to fetch models for plugin provider: ${e.message}`));
+            }
         }
     }
     return config;
