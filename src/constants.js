@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Banaxi
+
 export const GEMINI_MODELS = [
     { name: 'Gemini 2.5 Flash', value: 'gemini-2.5-flash' },
     { name: 'Gemini 2.5 Pro (needs paid api)', value: 'gemini-2.5-pro' },

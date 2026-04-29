@@ -1,6 +1,10 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Banaxi
+
 import fs from 'fs/promises';
 import path from 'path';
 import { requestPermission } from '../permissions.js';
+import { sendRemoteToolEvent } from '../remote.js';
 import * as diff from 'diff';
 import chalk from 'chalk';
 
@@ -43,6 +47,7 @@ export async function patchFile({ filepath, edits }) {
 
     const patch = diff.createPatch(filepath, originalContent, content);
 
+    process.stdout.write('\x1b[0m');
     console.log(chalk.cyan(`\nPreviewing changes for ${filepath}:`));
     patch.split('\n').filter(l => l.length > 0 && !l.startsWith('===') && !l.startsWith('---') && !l.startsWith('+++')).forEach(line => {
         if (line.startsWith('+')) console.log(chalk.green(line));
@@ -51,13 +56,19 @@ export async function patchFile({ filepath, edits }) {
     });
     console.log('');
 
-    const perm = await requestPermission('Patch File', filepath);
-    if (!perm.allowed) return `User denied permission to patch: ${filepath}`;
+    const details = `${filepath}\n\n${patch}`;
+    const perm = await requestPermission('Patch File', details);
+    if (!perm.allowed) {
+        sendRemoteToolEvent({ actionType: 'Patch File', details, status: 'denied' });
+        return `User denied permission to patch: ${filepath}`;
+    }
 
     try {
         await fs.writeFile(absPath, content, 'utf8');
+        sendRemoteToolEvent({ actionType: 'Patch File', details, status: 'completed' });
         return `Successfully patched ${filepath}`;
     } catch (err) {
+        sendRemoteToolEvent({ actionType: 'Patch File', details: `${details}\n\nError: ${err.message}`, status: 'failed' });
         return `Error writing file: ${err.message}`;
     }
 }

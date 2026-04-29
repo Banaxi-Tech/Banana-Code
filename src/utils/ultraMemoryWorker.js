@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Banaxi
+
 import { GeminiProvider } from '../providers/gemini.js';
 import { ClaudeProvider } from '../providers/claude.js';
 import { OpenAIProvider } from '../providers/openai.js';

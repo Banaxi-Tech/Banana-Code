@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Banaxi
+
 import chalk from 'chalk';
 import { AUTO_ROUTER_MODELS } from './autoModel.js';
 

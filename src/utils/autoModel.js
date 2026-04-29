@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Banaxi
+
 export const AUTO_MODEL_DESCRIPTIONS = {
     // OpenAI (API key)
     'gpt-5.4':              'Most capable OpenAI model (2026 Janury knowledge). Best for complex reasoning, hard coding problems, architecture design.',

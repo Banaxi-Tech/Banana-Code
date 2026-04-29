@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Banaxi
+
 import { select } from '@inquirer/prompts';
 import chalk from 'chalk';
 import crypto from 'crypto';
@@ -14,6 +17,47 @@ function wrapText(text, width) {
         lines.push(text.substring(i, i + width));
     }
     return lines;
+}
+
+async function promptPermissionChoice(actionType, details, signal = undefined) {
+    const boxWidth = 41; // Internal width
+
+    const actionLabel = ` Action: ${actionType}`;
+    const actionLine = actionLabel.padEnd(boxWidth, ' ');
+
+    const detailsLabel = ' Details: ';
+    const detailRows = wrapText(details, boxWidth - detailsLabel.length);
+
+    let detailsBlock = '';
+    detailRows.forEach((row, i) => {
+        const prefix = (i === 0) ? detailsLabel : ' '.repeat(detailsLabel.length);
+        detailsBlock += `│ ${prefix}${row.padEnd(boxWidth - detailsLabel.length, ' ')} │\n`;
+    });
+
+    const boxTop = chalk.magenta(`┌─────────────────────────────────────────┐
+│  🍌 BANANA CODE — Permission Request    │
+├─────────────────────────────────────────┤
+│ ${actionLine} │`);
+    const boxBottom = chalk.magenta(`├─────────────────────────────────────────┤
+│  [1] Allow Once                         │
+│  [2] Allow for This Session             │
+│  [3] Disallow (suggest changes)         │
+└─────────────────────────────────────────┘`);
+
+    console.log(boxTop);
+    console.log(chalk.magenta(detailsBlock.trimEnd()));
+    console.log(boxBottom);
+
+    const choices = [
+        { name: 'Allow Once', value: 'once' },
+        { name: 'Allow for This Session', value: 'session' },
+        { name: 'Disallow (suggest changes)', value: 'disallow' }
+    ];
+
+    return await select({
+        message: chalk.magenta('Select an option:'),
+        choices
+    }, signal ? { signal } : undefined);
 }
 
 export async function requestPermission(actionType, details) {
@@ -59,49 +103,50 @@ export async function requestPermission(actionType, details) {
 
     if (typeof global.apiPermissionHandler === 'function') {
         const ticketId = crypto.randomUUID();
-        const result = await global.apiPermissionHandler(ticketId, actionType, details);
-        if (result.remember) {
-            sessionPermissions.add(permKey);
+        const controller = new AbortController();
+        const remoteApproval = global.apiPermissionHandler(ticketId, actionType, details);
+
+        const winner = await Promise.race([
+            remoteApproval.then(result => {
+                controller.abort();
+                return { source: 'remote', result };
+            }),
+            promptPermissionChoice(actionType, details, controller.signal)
+                .then(choice => ({ source: 'local', choice }))
+                .catch(err => {
+                    if (err?.name === 'AbortPromptError' || err?.name === 'ExitPromptError') {
+                        return new Promise(() => {});
+                    }
+                    throw err;
+                })
+        ]);
+
+        if (winner.source === 'remote') {
+            if (winner.result.remember) {
+                sessionPermissions.add(permKey);
+            }
+            console.log(winner.result.allowed
+                ? chalk.green('Remote approved. Continuing as Allow Once.')
+                : chalk.red('Remote denied. Tool call cancelled.'));
+            return { allowed: winner.result.allowed };
         }
-        return { allowed: result.allowed };
+
+        if (typeof global.apiPermissionCancelHandler === 'function') {
+            global.apiPermissionCancelHandler(ticketId);
+        }
+
+        const choice = winner.choice;
+
+        if (choice === 'once') return { allowed: true };
+        if (choice === 'session') {
+            sessionPermissions.add(permKey);
+            return { allowed: true };
+        }
+
+        return { allowed: false };
     }
 
-    const boxWidth = 41; // Internal width
-
-    const actionLabel = ` Action: ${actionType}`;
-    const actionLine = actionLabel.padEnd(boxWidth, ' ');
-
-    const detailsLabel = ' Details: ';
-    const detailRows = wrapText(details, boxWidth - detailsLabel.length);
-
-    let detailsBlock = '';
-    detailRows.forEach((row, i) => {
-        const prefix = (i === 0) ? detailsLabel : ' '.repeat(detailsLabel.length);
-        detailsBlock += `│ ${prefix}${row.padEnd(boxWidth - detailsLabel.length, ' ')} │\n`;
-    });
-
-    const boxTop = chalk.magenta(`┌─────────────────────────────────────────┐
-│  🍌 BANANA CODE — Permission Request    │
-├─────────────────────────────────────────┤
-│ ${actionLine} │`);
-    const boxBottom = chalk.magenta(`├─────────────────────────────────────────┤
-│  [1] Allow Once                         │
-│  [2] Allow for This Session             │
-│  [3] Disallow (suggest changes)         │
-└─────────────────────────────────────────┘`);
-
-    console.log(boxTop);
-    console.log(chalk.magenta(detailsBlock.trimEnd()));
-    console.log(boxBottom);
-
-    const choice = await select({
-        message: chalk.magenta('Select an option:'),
-        choices: [
-            { name: 'Allow Once', value: 'once' },
-            { name: 'Allow for This Session', value: 'session' },
-            { name: 'Disallow (suggest changes)', value: 'disallow' }
-        ]
-    });
+    const choice = await promptPermissionChoice(actionType, details);
 
     if (choice === 'once') return { allowed: true };
     if (choice === 'session') {

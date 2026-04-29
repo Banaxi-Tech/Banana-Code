@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Banaxi
+
 import readline from 'readline';
 import chalk from 'chalk';
 import ora from 'ora';
@@ -22,6 +25,7 @@ import { estimateConversationTokens } from './utils/tokens.js';
 import { mcpManager } from './utils/mcp.js';
 import { startApiServer } from './server.js';
 import { loadPlugins, pluginRegistry, installPlugin, removePlugin, getConfiguredPlugins } from './utils/plugins.js';
+import { connectRemoteTooling, disconnectRemoteTooling, finalizeTurn, sendRemoteAiMessage } from './remote.js';
 
 let config;
 let providerInstance;
@@ -238,6 +242,27 @@ async function handleSlashCommand(command) {
                 console.log(chalk.green(`Switched model to ${newModel}.`));
             } else {
                 console.log(chalk.yellow(`Usage: /model <model_name> (or just /model for selection)`));
+            }
+            break;
+        case '/remotetooling':
+            if (args[0] === 'disconnect') {
+                disconnectRemoteTooling();
+                delete config.remoteUuid;
+                await saveConfig(config);
+                console.log(chalk.green('Remote tooling disconnected. Using normal CLI permissions.'));
+                break;
+            }
+
+            const { input: promptInput } = await import('@inquirer/prompts');
+            const uuidOrCode = await promptInput({
+                message: 'Enter your Account UUID or a Pairing Code from your Mobile App:',
+                validate: (v) => v.trim().length > 0 || 'Input cannot be empty'
+            });
+            const result = await connectRemoteTooling(uuidOrCode);
+            if (result && result.uuid) {
+                config.remoteUuid = result.uuid;
+                await saveConfig(config);
+                console.log(chalk.cyan(`Remote tooling configured with UUID: ${result.uuid}`));
             }
             break;
         case '/clear':
@@ -952,6 +977,8 @@ Available commands:
   /chats           - List persistent chat sessions
   /clear           - Clear chat history
   /clean           - Compress chat history into a summary to save tokens
+  /remotetooling   - Pair with Mobile App for remote approvals
+  /remotetooling disconnect - Disconnect Mobile App remote approvals
   /context         - Show current context window size
   /permissions     - List session-approved permissions
   /beta            - Manage beta features and tools
@@ -1478,6 +1505,10 @@ async function main() {
         global.bananaConfig = config;
         global.createProvider = createProvider;
 
+        if (config.remoteUuid) {
+            connectRemoteTooling(config.remoteUuid);
+        }
+
         if (process.argv.includes('--yolo')) {
             config.yolo = true;
         }
@@ -1671,8 +1702,14 @@ async function main() {
                 }
 
                 process.stdout.write(chalk.cyan('✦ '));
-                let responseText = await providerInstance.sendMessage({ text: modifiedInput, images: attachedImages });
-                
+                global.isAiSpeaking = true;
+                let responseText;
+                try {
+                    responseText = await providerInstance.sendMessage({ text: modifiedInput, images: attachedImages });
+                } finally {
+                    global.isAiSpeaking = false;
+                }
+
                 // Execute onAfterMessage lifecycle hooks
                 for (const hook of pluginRegistry.lifecycleHooks.onAfterMessage) {
                     try {
@@ -1682,6 +1719,9 @@ async function main() {
                         console.log(chalk.yellow(`Warning: Plugin onAfterMessage hook failed: ${e.message}`));
                     }
                 }
+
+                sendRemoteAiMessage(responseText);
+                finalizeTurn();
 
                 console.log(); // Extra newline after AI response
 

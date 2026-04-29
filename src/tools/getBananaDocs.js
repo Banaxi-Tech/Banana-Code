@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Banaxi
+
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';

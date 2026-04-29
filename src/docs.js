@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Banaxi
+
 export const BANANA_CODE_DOCS = `
 # 🍌 Banana Code Official Documentation (Summary)
 

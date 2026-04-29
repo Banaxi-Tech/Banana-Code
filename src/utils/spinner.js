@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Banaxi
+
 export const SPINNER_VERBS = [
   'Working', 'Thinking', 'Processing', 'Loading', 'Running',
   'Building', 'Computing', 'Executing', 'Preparing', 'Finishing',

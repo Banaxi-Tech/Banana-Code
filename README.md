@@ -46,6 +46,8 @@ When you download Banana Code, a request is sent to our server to count download
 Your IP address is processed momentarily to filter bots but is never stored.
 Only the total download count is saved.
 
+For full details, see the [Privacy Policy](https://bananacode.sh/privacy-policy.html).
+
 ## 🤔 Why Banana Code?
 While tools like Cursor provide great GUI experiences, Banana Code is built for developers who live in the terminal and want maximum flexibility. 
 - **No Vendor Lock-in**: Switch instantly between the best proprietary models (Gemini, Claude, OpenAI) and high-performance open-source models (Ollama Local, Ollama Cloud) mid-conversation.
@@ -549,6 +551,48 @@ All errors follow a consistent format:
 ```json
 { "type": "error", "message": "Description of what went wrong." }
 ```
+
+## 📱 Banana Code Remote (Android App)
+
+Banana Code Remote is a companion Android app that lets you monitor your CLI session and approve or deny AI tool calls from your phone — in real time, from anywhere.
+
+**[Download the APK →](https://drive.usercontent.google.com/download?id=1hzZ5I354hH1m3pOI_2N6hSMmzfV3CRPM&export=download&authuser=0&confirm=t&uuid=4f8125c7-91d2-4226-98b1-56f21ce6b17c&at=ALBwUgmSzSWDvxiIFLX8f0ogcFBH%3A1777466936495)**  
+Requires Android 10+ (API 29). Sideloading required (not on Play Store yet).
+
+### Features
+- **Live AI Feed** — Complete AI responses stream to your phone with full Markdown rendering (headings, bold, inline code, fenced code blocks with diff highlighting, tables).
+- **Push Notifications** — Get notified when the AI needs permission to run a command, write a file, or apply a patch.
+- **Approve / Deny with one tap** — From the notification shade or from inside the app.
+- **Tool History** — Every tool call is shown as a message in the chat history, including file diffs for write/patch operations.
+- **Dual-path permission flow** — The CLI simultaneously shows the standard Allow Once / Allow for Session / Deny prompt. Whichever side responds first wins; the other is cancelled automatically.
+
+### Setup
+
+**1. Install the APK** on your Android device. Go to `Settings → Install unknown apps` and allow your browser or file manager to sideload the file.
+
+**2. Open the app** — it will display a 6-character pairing code (e.g. `AB3XZ1`). The code expires in 5 minutes.
+
+**3. Run in your CLI:**
+```bash
+/remotetooling
+```
+Enter the pairing code. Once connected, you'll see "Mobile App connected!" in the CLI.
+
+**4. You're live.** AI messages stream to your phone, and tool approval notifications will arrive when the agent needs to take an action.
+
+### Disconnecting
+
+```bash
+/remotetooling disconnect
+```
+
+Closes the socket, clears the saved pairing UUID from config, and immediately reverts all permission prompts back to standard local CLI behaviour.
+
+### Privacy
+
+When Banana Remote is active, AI message text, tool call details (including command strings and code diffs), and approval decisions are relayed through our server at `bananacode.sh` over TLS. Messages are signed with HMAC-SHA256. Your prompts and full file contents are **not** relayed — only the AI's final responses and the details of specific tool calls.
+
+See the full [Privacy Policy](https://bananacode.sh/privacy-policy.html) for what is collected and how long it is retained.
 
 ## 🐛 Known Issues
 

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Banaxi
+
 import path from 'path';
 import { requestPermission } from '../permissions.js';
 import { glob } from 'glob';

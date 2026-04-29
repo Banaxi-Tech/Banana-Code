@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Banaxi
+
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import cors from 'cors';

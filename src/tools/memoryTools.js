@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Banaxi
+
 import { addMemory, removeMemory, loadMemory } from '../utils/memory.js';
 import chalk from 'chalk';
 import ora from 'ora';

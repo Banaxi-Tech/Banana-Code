@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Banaxi
+
 /**
  * Estimates the number of tokens in a given string.
  * This is a rough approximation (1 token ≈ 4 characters or ~0.75 words) 

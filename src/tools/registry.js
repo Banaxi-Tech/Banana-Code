@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Banaxi
+
 import { execCommand } from './execCommand.js';
 import { executeCommandInTerminal, sendToTerminal, terminateTerminalSession } from './terminal.js';
 import { getBananaDocs } from './getBananaDocs.js';

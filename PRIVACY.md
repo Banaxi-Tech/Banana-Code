@@ -1,0 +1,104 @@
+# 🍌 Banana Code Privacy Policy
+
+**Last updated: April 29, 2026**
+
+## 1. Overview
+
+This Privacy Policy explains what data is collected, how it is used, and your rights when you use Banana Code and the Banana Code Remote companion Android application. We are committed to transparency and collecting only what is strictly necessary to make the product work.
+
+## 2. Banana Code CLI — Data Collected
+
+### 2.1 One-Time Installation Ping
+
+When you install Banana Code via `npm install -g @banaxi/banana-code` and run it for the first time, a single HTTP request is sent to our server (bananacode.sh) to count the download. This request includes:
+
+- Your IP address — processed momentarily for bot filtering, **never stored**.
+- A timestamp and a basic User-Agent string.
+
+Only the total download count (an integer) is saved. No personally identifiable information (PII) is retained from this ping.
+
+### 2.2 API Keys
+
+Your AI provider API keys (OpenAI, Anthropic, Google Gemini, Mistral, etc.) are stored **locally only** in your home directory (`~/.config/banana-code/config.json`). They are never transmitted to our servers.
+
+### 2.3 Chat History & Sessions
+
+All chat history and session files are stored **locally only** in your home directory. They are never uploaded to any server unless you explicitly enable Banana Remote (see Section 3).
+
+### 2.4 Workspace & File Contents
+
+Banana Code reads your local files when you use `@file` mentions, `write_file`, `patch_file`, or the workspace auto-feed feature. This content is sent directly from your machine to the AI provider you have configured (e.g. Anthropic, Google, OpenAI). We do not intercept, store, or process this data.
+
+## 3. Banana Code Remote (Android App) — Data Collected
+
+Banana Code Remote is an optional companion Android app that lets you monitor your CLI session and approve tool calls remotely. When you use it, the following data flows through our relay server at `bananacode.sh`:
+
+### 3.1 Account Identifier
+
+On first launch, the app creates an anonymous account UUID (a random ID with no personal information attached). This UUID is stored in the app's local preferences and in our database for the purpose of routing messages between your CLI and your phone. You may delete this data at any time by contacting us.
+
+### 3.2 AI Messages
+
+When Banana Remote is paired, the text of AI responses from your CLI session is relayed through our server to your phone. These messages are temporarily stored in our database to support message history. They contain only the AI-generated text, not your prompts or file contents.
+
+### 3.3 Tool Call Requests
+
+When the AI agent wants to execute a command, write a file, or patch code, a tool request is sent through our relay. This includes:
+
+- The action type (e.g. "Execute Command", "Write File").
+- The details (e.g. the command string, the file path, or the diff).
+
+This data may include code snippets, file paths, and shell commands from your local machine. It is relayed through our server and stored temporarily in our database.
+
+### 3.4 Tool Responses (Approvals/Denials)
+
+Your Approve or Deny decisions are relayed from the app back to the CLI via our server. The approval decision is stored alongside the tool request in our database.
+
+### 3.5 Pairing Codes
+
+Short-lived alphanumeric pairing codes (used to link your CLI to your phone) are stored temporarily and deleted immediately upon successful use or expiry (5 minutes).
+
+## 4. Data Storage & Security
+
+- Our relay server runs at `bananacode.sh` on infrastructure in the EU.
+- All connections use TLS (HTTPS / WSS). Messages are signed with HMAC-SHA256 to verify authenticity.
+- Data is stored in an SQLite database on the server.
+- No third-party analytics, advertising networks, or data brokers receive your data.
+- Access to the server and database is restricted to the project maintainer.
+
+## 5. Data Retention
+
+- Tool requests and messages are stored for session debugging purposes. There is currently no automatic deletion schedule. You may request deletion at any time.
+- Pairing codes are automatically deleted after use or after 5 minutes.
+- The installation ping counter only stores an aggregate number — no per-request history is kept.
+
+## 6. Third-Party AI Providers
+
+When you use Banana Code, your prompts and file contents are sent directly to the AI provider you configured (Google, Anthropic, OpenAI, Mistral, etc.). Their own privacy policies govern how they handle this data. Banana Code does not intermediate or receive copies of these messages.
+
+## 7. Children's Privacy
+
+Banana Code and Banana Code Remote are not directed at children under 13. We do not knowingly collect data from children.
+
+## 8. Your Rights
+
+You have the right to:
+
+- Request a copy of data associated with your UUID.
+- Request deletion of your account UUID and all associated data from our relay server.
+- Disconnect Banana Remote at any time using `/remotetooling disconnect` in the CLI.
+
+To exercise these rights, contact us at **banaxitech@gmail.com**.
+
+## 9. Changes to This Policy
+
+We may update this Privacy Policy as features change. When a significant update is made, a notice banner will be displayed at the top of the website policy page for 30 days. The "Last updated" date will always reflect the date of the most recent change, and a link to the full change history is available on the website.
+
+Continued use of the product after changes constitutes acceptance of the updated policy.
+
+## 10. Contact
+
+Questions or requests regarding this Privacy Policy:
+
+- Email: **banaxitech@gmail.com**
+- GitHub: [github.com/banaxi-tech/banana-code](https://github.com/banaxi-tech/banana-code)

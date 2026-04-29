@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Banaxi
+
 import Anthropic from '@anthropic-ai/sdk';
 import { getAvailableTools, executeTool } from '../tools/registry.js';
 import chalk from 'chalk';
