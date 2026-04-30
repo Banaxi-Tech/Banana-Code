@@ -10,6 +10,7 @@ import { getSystemPrompt } from '../prompt.js';
 import { printMarkdown } from '../utils/markdown.js';
 import { OPENAI_MODELS, CODEX_MODELS } from '../constants.js';
 import { AUTO_MODEL_DESCRIPTIONS, AUTO_ROUTER_MODELS, buildRoutingPrompt, parseRoutingResponse, openAIMessagesToAutoRouterHistory } from '../utils/autoModel.js';
+import { sendRemoteAiSegment } from '../remote.js';
 
 /**
  * Notice: Parts of the OAuth authentication flow and SSE streaming logic in this file 
@@ -314,6 +315,10 @@ export class OpenAIProvider {
                 if (toolCalls.length === 0) {
                     if (!this.config.isApiMode) console.log();
                     break;
+                }
+
+                if (chunkResponse && !this.config.isApiMode) {
+                    sendRemoteAiSegment(chunkResponse);
                 }
 
                 this.messages.push({

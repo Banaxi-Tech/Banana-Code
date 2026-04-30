@@ -1,6 +1,6 @@
 # 🍌 Banana Code Privacy Policy
 
-**Last updated: April 29, 2026**
+**Last updated: April 30, 2026**
 
 ## 1. Overview
 
@@ -33,9 +33,20 @@ Banana Code reads your local files when you use `@file` mentions, `write_file`, 
 
 Banana Code Remote is an optional companion Android app that lets you monitor your CLI session and approve tool calls remotely. When you use it, the following data flows through our relay server at `bananacode.sh`:
 
-### 3.1 Account Identifier
+### 3.1 Account Credentials
 
-On first launch, the app creates an anonymous account UUID (a random ID with no personal information attached). This UUID is stored in the app's local preferences and in our database for the purpose of routing messages between your CLI and your phone. You may delete this data at any time by contacting us.
+To use Banana Code Remote you create an account with a **username** and **password**. The username is chosen by you and is stored in our database. The password is **never stored in plain text** — it is hashed using scrypt (a cryptographically strong, memory-hard algorithm) before being saved. We cannot recover your password; only a correct password will verify against the stored hash.
+
+A random account UUID is generated at registration and stored alongside your username. This UUID is used to route messages between your CLI and your phone. You may delete your account and all associated data at any time by contacting us.
+
+### 3.1.1 Device Tokens
+
+After registering or logging in (app) and after redeeming a pairing code (CLI), a unique **opaque device token** is issued for each device:
+
+- The app receives a `bapp_…` token.
+- The CLI receives a `bcli_…` token.
+
+These tokens are stored as SHA-256 hashes in our database. The plain-text token is only ever held on your device. Tokens are used to authenticate all API calls and Socket.IO connections. You can revoke tokens by logging out (app) or disconnecting (`/remotetooling disconnect` in the CLI).
 
 ### 3.2 AI Messages
 
@@ -61,7 +72,9 @@ Short-lived alphanumeric pairing codes (used to link your CLI to your phone) are
 ## 4. Data Storage & Security
 
 - Our relay server runs at `bananacode.sh` on infrastructure in the EU.
-- All connections use TLS (HTTPS / WSS). Messages are signed with HMAC-SHA256 to verify authenticity.
+- All connections use TLS (HTTPS / WSS).
+- All API requests and Socket.IO connections are authenticated with per-device **Bearer tokens**. Tokens are stored only as SHA-256 hashes on the server; the plain-text value never leaves your device.
+- Passwords are stored using **scrypt** (memory-hard key derivation). They are never stored in plain text.
 - Data is stored in an SQLite database on the server.
 - No third-party analytics, advertising networks, or data brokers receive your data.
 - Access to the server and database is restricted to the project maintainer.
@@ -88,7 +101,7 @@ You have the right to:
 - Request deletion of your account UUID and all associated data from our relay server.
 - Disconnect Banana Remote at any time using `/remotetooling disconnect` in the CLI.
 
-To exercise these rights, contact us at **banaxitech@gmail.com**.
+To exercise these rights, contact us at **[banaxitech@gmail.com](mailto:banaxitech@gmail.com)**.
 
 ## 9. Changes to This Policy
 
@@ -100,5 +113,6 @@ Continued use of the product after changes constitutes acceptance of the updated
 
 Questions or requests regarding this Privacy Policy:
 
-- Email: **banaxitech@gmail.com**
+- Email: **[banaxitech@gmail.com](mailto:banaxitech@gmail.com)**
 - GitHub: [github.com/banaxi-tech/banana-code](https://github.com/banaxi-tech/banana-code)
+

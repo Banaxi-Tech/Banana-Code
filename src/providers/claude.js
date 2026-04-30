@@ -10,6 +10,7 @@ import { getSystemPrompt } from '../prompt.js';
 import { printMarkdown } from '../utils/markdown.js';
 import { CLAUDE_MODELS, CLAUDE_PRICING } from '../constants.js';
 import { AUTO_MODEL_DESCRIPTIONS, AUTO_ROUTER_MODELS, buildRoutingPrompt, parseRoutingResponse, claudeMessagesToAutoRouterHistory } from '../utils/autoModel.js';
+import { sendRemoteAiSegment } from '../remote.js';
 
 export class ClaudeProvider {
     constructor(config) {
@@ -337,6 +338,10 @@ export class ClaudeProvider {
                 if (toolCalls.length === 0) {
                     if (!this.config.isApiMode) console.log();
                     break;
+                }
+
+                if (chunkResponse && !this.config.isApiMode) {
+                    sendRemoteAiSegment(chunkResponse);
                 }
 
                 const toolResultContent = [];

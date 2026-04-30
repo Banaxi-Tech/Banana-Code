@@ -10,23 +10,45 @@ let socket;
 let isConnected = false;
 let pendingRequests = new Map();
 let currentTurnId = null;
+let sentTextThisResponse = '';
 
-// Same secret as server
-const API_SECRET = process.env.API_SECRET || 'banana_secret_key_2026';
-
-function signData(data) {
-    return crypto.createHmac('sha256', API_SECRET).update(JSON.stringify(data)).digest('hex');
-}
+const REMOTE_API_URL = process.env.REMOTE_API_URL || 'https://bananacode.sh';
 
 export function finalizeTurn() {
     if (socket && currentTurnId) {
         const data = { turnId: currentTurnId };
-        socket.emit('turn_end', { ...data, signature: signData(data) });
+        socket.emit('turn_end', data);
     }
     currentTurnId = null;
 }
 
+export function resetRemoteAiResponseTracking() {
+    sentTextThisResponse = '';
+}
+
 export function sendRemoteAiMessage(text) {
+    if (!socket || !isConnected || typeof text !== 'string' || text.trim().length === 0) {
+        return;
+    }
+
+    let textToSend = text;
+    if (sentTextThisResponse && text.startsWith(sentTextThisResponse)) {
+        textToSend = text.slice(sentTextThisResponse.length);
+    }
+
+    if (textToSend.trim().length === 0) {
+        return;
+    }
+
+    if (!currentTurnId) {
+        currentTurnId = crypto.randomUUID();
+    }
+
+    const msgData = { text: textToSend, turnId: currentTurnId, final: true };
+    socket.emit('ai_message', msgData);
+}
+
+export function sendRemoteAiSegment(text) {
     if (!socket || !isConnected || typeof text !== 'string' || text.trim().length === 0) {
         return;
     }
@@ -36,7 +58,9 @@ export function sendRemoteAiMessage(text) {
     }
 
     const msgData = { text, turnId: currentTurnId, final: true };
-    socket.emit('ai_message', { ...msgData, signature: signData(msgData) });
+    socket.emit('ai_message', msgData);
+    sentTextThisResponse += text;
+    finalizeTurn();
 }
 
 export function sendRemoteToolEvent({ id = crypto.randomUUID(), actionType, details, status = 'completed' }) {
@@ -51,38 +75,54 @@ export function sendRemoteToolEvent({ id = crypto.randomUUID(), actionType, deta
         status,
         timestamp: Date.now()
     };
-    socket.emit('tool_event', { ...eventData, signature: signData(eventData) });
+    socket.emit('tool_event', eventData);
 }
 
-export async function connectRemoteTooling(uuidOrCode) {
+export async function redeemRemotePairingCode(pairingCode) {
+    const code = String(pairingCode || '').trim().toUpperCase();
+    if (!code) {
+        console.log(chalk.red('Pairing code cannot be empty.'));
+        return null;
+    }
+
+    try {
+        const res = await fetch(`${REMOTE_API_URL}/api/remote/pair/redeem`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code })
+        });
+        const data = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+            console.log(chalk.red(`Failed to redeem pairing code: ${data.error || res.statusText}`));
+            return null;
+        }
+
+        return { uuid: data.uuid, token: data.token, deviceType: 'cli' };
+    } catch (e) {
+        console.log(chalk.red(`Error redeeming pairing code: ${e.message}`));
+        return null;
+    }
+}
+
+export async function connectRemoteTooling(credentials) {
     if (socket) {
         socket.disconnect();
     }
 
-    const apiUrl = process.env.REMOTE_API_URL || 'https://bananacode.sh';
-    let uuid = uuidOrCode;
+    const uuid = credentials?.uuid;
+    const token = credentials?.token || credentials?.remoteDeviceToken;
 
-    if (uuidOrCode.length <= 8 && !uuidOrCode.includes('-')) {
-        try {
-            const res = await fetch(`${apiUrl}/api/remote/resolve/${uuidOrCode}`);
-            if (res.ok) {
-                const data = await res.json();
-                uuid = data.uuid;
-            } else {
-                console.log(chalk.red(`Failed to resolve pairing code.`));
-                return;
-            }
-        } catch (e) {
-            console.log(chalk.red(`Error: ${e.message}`));
-            return;
-        }
+    if (!uuid || !token) {
+        console.log(chalk.red('Remote tooling now requires secure pairing. Run /remotetooling and enter a code from the phone app.'));
+        return null;
     }
 
-    socket = io(apiUrl, { reconnection: true });
+    socket = io(REMOTE_API_URL, { reconnection: true });
 
     socket.on('connect', () => {
-        const joinData = { role: 'cli', uuid };
-        socket.emit('join', { ...joinData, signature: signData(joinData) });
+        const joinData = { role: 'cli', token };
+        socket.emit('join', joinData);
         isConnected = true;
     });
 
@@ -110,7 +150,7 @@ export async function connectRemoteTooling(uuidOrCode) {
             console.log(chalk.yellow(`\n[Remote Tooling] Waiting for Mobile App approval...`));
             pendingRequests.set(ticketId, resolve);
             const reqData = { id: ticketId, actionType, details };
-            socket.emit('tool_request', { ...reqData, signature: signData(reqData) });
+            socket.emit('tool_request', reqData);
         });
     };
 
@@ -119,10 +159,10 @@ export async function connectRemoteTooling(uuidOrCode) {
 
         pendingRequests.delete(ticketId);
         const data = { id: ticketId };
-        socket.emit('tool_cancel', { ...data, signature: signData(data) });
+        socket.emit('tool_cancel', data);
     };
 
-    return { socket, uuid };
+    return { socket, uuid, token, deviceType: 'cli' };
 }
 
 export function disconnectRemoteTooling() {

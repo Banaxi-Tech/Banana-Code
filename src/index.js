@@ -25,7 +25,7 @@ import { estimateConversationTokens } from './utils/tokens.js';
 import { mcpManager } from './utils/mcp.js';
 import { startApiServer } from './server.js';
 import { loadPlugins, pluginRegistry, installPlugin, removePlugin, getConfiguredPlugins } from './utils/plugins.js';
-import { connectRemoteTooling, disconnectRemoteTooling, finalizeTurn, sendRemoteAiMessage } from './remote.js';
+import { connectRemoteTooling, disconnectRemoteTooling, finalizeTurn, redeemRemotePairingCode, resetRemoteAiResponseTracking, sendRemoteAiMessage } from './remote.js';
 
 let config;
 let providerInstance;
@@ -248,21 +248,31 @@ async function handleSlashCommand(command) {
             if (args[0] === 'disconnect') {
                 disconnectRemoteTooling();
                 delete config.remoteUuid;
+                delete config.remoteDeviceToken;
+                delete config.remoteDeviceType;
                 await saveConfig(config);
                 console.log(chalk.green('Remote tooling disconnected. Using normal CLI permissions.'));
                 break;
             }
 
             const { input: promptInput } = await import('@inquirer/prompts');
-            const uuidOrCode = await promptInput({
-                message: 'Enter your Account UUID or a Pairing Code from your Mobile App:',
+            const isMigration = args[0] === 'migrate';
+            const pairingCode = await promptInput({
+                message: isMigration
+                    ? 'Enter the new secure pairing code from your Mobile App:'
+                    : 'Enter the pairing code from your Mobile App:',
                 validate: (v) => v.trim().length > 0 || 'Input cannot be empty'
             });
-            const result = await connectRemoteTooling(uuidOrCode);
+            const redeemed = await redeemRemotePairingCode(pairingCode);
+            if (!redeemed) break;
+
+            const result = await connectRemoteTooling(redeemed);
             if (result && result.uuid) {
                 config.remoteUuid = result.uuid;
+                config.remoteDeviceToken = result.token;
+                config.remoteDeviceType = result.deviceType;
                 await saveConfig(config);
-                console.log(chalk.cyan(`Remote tooling configured with UUID: ${result.uuid}`));
+                console.log(chalk.cyan(`Remote tooling securely paired with account: ${result.uuid}`));
             }
             break;
         case '/clear':
@@ -977,7 +987,8 @@ Available commands:
   /chats           - List persistent chat sessions
   /clear           - Clear chat history
   /clean           - Compress chat history into a summary to save tokens
-  /remotetooling   - Pair with Mobile App for remote approvals
+  /remotetooling   - Securely pair with Mobile App for remote approvals
+  /remotetooling migrate - Replace old UUID-only pairing with secure pairing
   /remotetooling disconnect - Disconnect Mobile App remote approvals
   /context         - Show current context window size
   /permissions     - List session-approved permissions
@@ -1505,8 +1516,14 @@ async function main() {
         global.bananaConfig = config;
         global.createProvider = createProvider;
 
-        if (config.remoteUuid) {
-            connectRemoteTooling(config.remoteUuid);
+        if (config.remoteUuid && config.remoteDeviceToken) {
+            connectRemoteTooling({
+                uuid: config.remoteUuid,
+                token: config.remoteDeviceToken,
+                deviceType: config.remoteDeviceType || 'cli'
+            });
+        } else if (config.remoteUuid && !config.remoteDeviceToken) {
+            console.log(chalk.yellow('Remote tooling uses an old pairing. Create/login on the phone, generate a code, then run /remotetooling migrate.'));
         }
 
         if (process.argv.includes('--yolo')) {
@@ -1704,6 +1721,7 @@ async function main() {
                 process.stdout.write(chalk.cyan('✦ '));
                 global.isAiSpeaking = true;
                 let responseText;
+                resetRemoteAiResponseTracking();
                 try {
                     responseText = await providerInstance.sendMessage({ text: modifiedInput, images: attachedImages });
                 } finally {
@@ -1722,6 +1740,7 @@ async function main() {
 
                 sendRemoteAiMessage(responseText);
                 finalizeTurn();
+                resetRemoteAiResponseTracking();
 
                 console.log(); // Extra newline after AI response
 

@@ -10,6 +10,7 @@ import { getSystemPrompt } from '../prompt.js';
 import { printMarkdown } from '../utils/markdown.js';
 import { MISTRAL_MODELS } from '../constants.js';
 import { AUTO_MODEL_DESCRIPTIONS, AUTO_ROUTER_MODELS, buildRoutingPrompt, parseRoutingResponse, openAIMessagesToAutoRouterHistory } from '../utils/autoModel.js';
+import { sendRemoteAiSegment } from '../remote.js';
 
 export class MistralProvider {
     constructor(config) {
@@ -164,6 +165,10 @@ export class MistralProvider {
                 if (toolCalls.length === 0) {
                     if (!this.config.isApiMode) console.log();
                     break;
+                }
+
+                if (chunkResponse && !this.config.isApiMode) {
+                    sendRemoteAiSegment(chunkResponse);
                 }
 
                 this.messages.push({

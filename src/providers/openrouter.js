@@ -8,6 +8,7 @@ import ora from 'ora';
 import { getRandomSpinnerText } from '../utils/spinner.js';
 import { getSystemPrompt } from '../prompt.js';
 import { printMarkdown } from '../utils/markdown.js';
+import { sendRemoteAiSegment } from '../remote.js';
 
 export class OpenRouterProvider {
     constructor(config) {
@@ -151,6 +152,10 @@ export class OpenRouterProvider {
                 if (toolCalls.length === 0) {
                     if (!this.config.isApiMode) console.log();
                     break;
+                }
+
+                if (chunkResponse && !this.config.isApiMode) {
+                    sendRemoteAiSegment(chunkResponse);
                 }
 
                 this.messages.push({

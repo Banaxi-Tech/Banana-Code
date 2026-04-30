@@ -7,6 +7,7 @@ import ora from 'ora';
 import { getRandomSpinnerText } from '../utils/spinner.js';
 import { getSystemPrompt } from '../prompt.js';
 import { printMarkdown } from '../utils/markdown.js';
+import { sendRemoteAiSegment } from '../remote.js';
 
 export class OllamaProvider {
     constructor(config) {
@@ -128,6 +129,10 @@ export class OllamaProvider {
                 if (!lastMessageObj.tool_calls || lastMessageObj.tool_calls.length === 0) {
                     if (!this.config.isApiMode) console.log();
                     break;
+                }
+
+                if (currentChunkResponse && !this.config.isApiMode) {
+                    sendRemoteAiSegment(currentChunkResponse);
                 }
 
                 for (const call of lastMessageObj.tool_calls) {

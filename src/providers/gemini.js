@@ -9,6 +9,7 @@ import { getSystemPrompt } from '../prompt.js';
 import { printMarkdown } from '../utils/markdown.js';
 import { GEMINI_MODELS } from '../constants.js';
 import { AUTO_MODEL_DESCRIPTIONS, AUTO_ROUTER_MODELS, buildRoutingPrompt, parseRoutingResponse, geminiMessagesToAutoRouterHistory } from '../utils/autoModel.js';
+import { sendRemoteAiSegment } from '../remote.js';
 
 /** When Gemini Auto Mode routing fails, use this model instead of the first list entry (2.5 Flash). */
 const GEMINI_AUTO_FALLBACK_MODEL = 'gemini-3-flash-preview';
@@ -281,6 +282,10 @@ export class GeminiProvider {
 
                 let hasToolCalls = false;
                 let toolResults = [];
+                const hasPendingToolCall = aggregatedParts.some(part => part.functionCall);
+                if (hasPendingToolCall && currentTurnText && !this.config.isApiMode) {
+                    sendRemoteAiSegment(currentTurnText);
+                }
 
                 for (const part of aggregatedParts) {
                     if (part.functionCall) {

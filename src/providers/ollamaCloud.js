@@ -9,6 +9,7 @@ import { getSystemPrompt } from '../prompt.js';
 import { printMarkdown } from '../utils/markdown.js';
 import { OLLAMA_CLOUD_MODELS } from '../constants.js';
 import { AUTO_MODEL_DESCRIPTIONS, AUTO_ROUTER_MODELS, buildRoutingPrompt, parseRoutingResponse, openAIMessagesToAutoRouterHistory } from '../utils/autoModel.js';
+import { sendRemoteAiSegment } from '../remote.js';
 
 export class OllamaCloudProvider {
     constructor(config) {
@@ -196,6 +197,10 @@ export class OllamaCloudProvider {
                 if (!lastMessageObj.tool_calls || lastMessageObj.tool_calls.length === 0) {
                     if (!this.config.isApiMode) console.log();
                     break;
+                }
+
+                if (currentChunkResponse && !this.config.isApiMode) {
+                    sendRemoteAiSegment(currentChunkResponse);
                 }
 
                 for (const call of lastMessageObj.tool_calls) {
