@@ -105,6 +105,11 @@ Optional flags:
 | `--yolo` | Start with YOLO mode on (same as `/yolo` in-app: auto-approve permission prompts). |
 | `--resume [uuid]` | Resume a session; UUID optional (latest session if omitted). |
 
+### Project-Specific Settings
+Add `./.banana/settings.local.json` in a project folder to override or add CLI settings only while Banana Code is started from that folder. Local settings are merged over your global `~/.config/banana-code/config.json` in memory and are not saved back to the global config.
+
+Because this file can change safety-related settings such as permission behavior, Banana Code asks you to confirm that you trust the folder every time it starts in a directory containing `./.banana/settings.local.json`.
+
 ### Resume a Session
 To continue where you left off, use the `--resume` flag with your session UUID:
 ```bash

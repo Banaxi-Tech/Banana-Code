@@ -13,7 +13,7 @@ import crypto from 'crypto';
 import { loadConfig } from './config.js';
 import { listSessions, loadSession, saveSession, generateSessionId } from './sessions.js';
 
-export async function startApiServer(port = 3000, createProvider, host = '127.0.0.1', noAuth = false) {
+export async function startApiServer(port = 3000, createProvider, host = '127.0.0.1', noAuth = false, initialConfig = null) {
     if (noAuth) {
         console.log(chalk.bgRed.white.bold(`\n ⚠️ WARNING: --no-auth is DEPRECATED and UNSECURE! `));
         console.log(chalk.yellow(`Your API is completely open. Anyone on your network can execute arbitrary commands on your machine.\n`));
@@ -62,7 +62,7 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
         next();
     });
 
-    let config = await loadConfig();
+    let config = initialConfig || await loadConfig({ includeProjectLocal: true });
     let providerInstance = null;
 
     // WebSocket connection handling

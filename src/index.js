@@ -4,7 +4,7 @@
 import readline from 'readline';
 import chalk from 'chalk';
 import ora from 'ora';
-import { loadConfig, saveConfig, setupProvider } from './config.js';
+import { confirmProjectLocalSettingsTrust, loadConfig, saveConfig, setupProvider } from './config.js';
 import { runStartup } from './startup.js';
 import { getSessionPermissions, setYoloMode } from './permissions.js';
 import { cleanupTerminalSessions } from './tools/terminal.js';
@@ -1505,7 +1505,13 @@ function promptUser() {
 
 async function main() {
     try {
-        config = await loadConfig();
+        const trustedProjectSettings = await confirmProjectLocalSettingsTrust();
+        if (!trustedProjectSettings) {
+            console.log(chalk.yellow('Exiting. Review .banana/settings.local.json before running Banana Code here again.'));
+            process.exit(0);
+        }
+
+        config = await loadConfig({ includeProjectLocal: true });
 
         // Default Banana Guard to true for existing users upgrading
         if (config.useBananaGuard === undefined) {
@@ -1553,7 +1559,7 @@ async function main() {
 
             const noAuth = process.argv.includes('--no-auth');
 
-            await startApiServer(port, createProvider, host, noAuth);
+            await startApiServer(port, createProvider, host, noAuth, config);
             return;
         }
 

@@ -14,27 +14,179 @@ import { pluginRegistry } from './utils/plugins.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.config', 'banana-code');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
+const PROJECT_LOCAL_SETTINGS_RELATIVE_PATH = path.join('.banana', 'settings.local.json');
+const PROJECT_LOCAL_CONFIG_METADATA = Symbol('projectLocalConfigMetadata');
 
-export async function loadConfig() {
-    try {
-        const data = await fs.readFile(CONFIG_FILE, 'utf-8');
-        return JSON.parse(data);
-    } catch (error) {
-        if (error.code === 'ENOENT') {
-            if (process.argv.includes('--api')) {
-                return { provider: null, model: null, isInitialApiSetup: true };
+function isPlainObject(value) {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function cloneConfig(value) {
+    return JSON.parse(JSON.stringify(value));
+}
+
+function isEmptyPlainObject(value) {
+    return isPlainObject(value) && Object.keys(value).length === 0;
+}
+
+function deepMergeConfig(base, override) {
+    const merged = { ...base };
+
+    for (const [key, value] of Object.entries(override)) {
+        if (isPlainObject(value) && isPlainObject(base[key])) {
+            merged[key] = deepMergeConfig(base[key], value);
+        } else {
+            merged[key] = value;
+        }
+    }
+
+    return merged;
+}
+
+function restoreProjectLocalValues(target, globalConfig, localSettings) {
+    for (const [key, localValue] of Object.entries(localSettings)) {
+        const globalHasKey = Object.prototype.hasOwnProperty.call(globalConfig || {}, key);
+        const globalValue = isPlainObject(globalConfig) ? globalConfig[key] : undefined;
+
+        if (isPlainObject(localValue) && isPlainObject(target[key]) && (!globalHasKey || isPlainObject(globalValue))) {
+            restoreProjectLocalValues(target[key], globalValue, localValue);
+
+            if (!globalHasKey && isEmptyPlainObject(target[key])) {
+                delete target[key];
             }
-            return await runSetupWizard();
+            continue;
+        }
+
+        if (globalHasKey) {
+            target[key] = globalValue;
+        } else {
+            delete target[key];
+        }
+    }
+}
+
+function markProjectLocalConfig(config, globalConfig, localSettings) {
+    Object.defineProperty(config, PROJECT_LOCAL_CONFIG_METADATA, {
+        value: {
+            globalConfig: cloneConfig(globalConfig),
+            localSettings: cloneConfig(localSettings)
+        },
+        enumerable: false,
+        configurable: true
+    });
+
+    return config;
+}
+
+function getPersistentConfig(config) {
+    const { isApiMode, onChunk, onToolStart, onToolEnd, ...persistentConfig } = config;
+    const metadata = config[PROJECT_LOCAL_CONFIG_METADATA];
+
+    if (!metadata) {
+        return persistentConfig;
+    }
+
+    restoreProjectLocalValues(persistentConfig, metadata.globalConfig, metadata.localSettings);
+
+    return persistentConfig;
+}
+
+export function getProjectLocalSettingsPath(cwd = process.cwd()) {
+    return path.join(cwd, PROJECT_LOCAL_SETTINGS_RELATIVE_PATH);
+}
+
+export async function hasProjectLocalSettings(cwd = process.cwd()) {
+    try {
+        await fs.access(getProjectLocalSettingsPath(cwd));
+        return true;
+    } catch (error) {
+        if (error.code === 'ENOENT') return false;
+        throw error;
+    }
+}
+
+export async function confirmProjectLocalSettingsTrust(cwd = process.cwd()) {
+    const settingsPath = getProjectLocalSettingsPath(cwd);
+
+    if (!await hasProjectLocalSettings(cwd)) {
+        return true;
+    }
+
+    console.log(chalk.yellow.bold('\nAccessing workspace:\n'));
+    console.log(` ${cwd}\n`);
+    console.log(chalk.yellow(` Quick safety check: Is this a project you created or one you trust? Banana Code found a Project Specific settings file which could enable bypass permissions or other settings. If not then you should look at the ${PROJECT_LOCAL_SETTINGS_RELATIVE_PATH} to see what it changes and if it's safe.\n`));
+
+    try {
+        return await select({
+            message: `Trust ${settingsPath}?`,
+            choices: [
+                { name: 'Yes, I trust this folder', value: true },
+                { name: 'No, exit', value: false }
+            ]
+        });
+    } catch (error) {
+        if (error.name === 'ExitPromptError') {
+            return false;
         }
         throw error;
     }
 }
 
+export async function applyProjectLocalSettings(config, cwd = process.cwd()) {
+    const settingsPath = getProjectLocalSettingsPath(cwd);
+
+    try {
+        const data = await fs.readFile(settingsPath, 'utf-8');
+        const localSettings = JSON.parse(data);
+
+        if (!isPlainObject(localSettings)) {
+            throw new Error(`${settingsPath} must contain a JSON object.`);
+        }
+
+        const globalConfig = cloneConfig(config);
+        const mergedConfig = deepMergeConfig(globalConfig, localSettings);
+        return markProjectLocalConfig(mergedConfig, globalConfig, localSettings);
+    } catch (error) {
+        if (error.code === 'ENOENT') {
+            return config;
+        }
+        if (error instanceof SyntaxError) {
+            throw new Error(`Failed to parse ${settingsPath}: ${error.message}`);
+        }
+        throw error;
+    }
+}
+
+export async function loadConfig(options = {}) {
+    const { includeProjectLocal = false, cwd = process.cwd() } = options;
+    let config;
+
+    try {
+        const data = await fs.readFile(CONFIG_FILE, 'utf-8');
+        config = JSON.parse(data);
+    } catch (error) {
+        if (error.code === 'ENOENT') {
+            if (process.argv.includes('--api')) {
+                config = { provider: null, model: null, isInitialApiSetup: true };
+            } else {
+                config = await runSetupWizard();
+            }
+        } else {
+            throw error;
+        }
+    }
+
+    if (includeProjectLocal) {
+        return await applyProjectLocalSettings(config, cwd);
+    }
+
+    return config;
+}
+
 export async function saveConfig(config) {
     try {
         await fs.mkdir(CONFIG_DIR, { recursive: true });
-        // Strip transient API flags before saving to disk
-        const { isApiMode, onChunk, onToolStart, onToolEnd, ...persistentConfig } = config;
+        const persistentConfig = getPersistentConfig(config);
         await fs.writeFile(CONFIG_FILE, JSON.stringify(persistentConfig, null, 2), 'utf-8');
     } catch (error) {
         console.error(chalk.red("Failed to save config:"), error);
