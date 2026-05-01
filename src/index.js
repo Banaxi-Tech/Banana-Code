@@ -4,7 +4,7 @@
 import readline from 'readline';
 import chalk from 'chalk';
 import ora from 'ora';
-import { confirmProjectLocalSettingsTrust, loadConfig, saveConfig, setupProvider } from './config.js';
+import { confirmProjectLocalSettingsTrust, getBananaSplitLocalConfig, loadConfig, saveConfig, setupBananaSplit, setupProvider } from './config.js';
 import { runStartup } from './startup.js';
 import { getSessionPermissions, setYoloMode } from './permissions.js';
 import { cleanupTerminalSessions } from './tools/terminal.js';
@@ -43,7 +43,7 @@ let historyIndex = -1;
 let currentInputSaved = '';
 
 function createProvider(overrideConfig = null) {
-    const activeConfig = overrideConfig || config;
+    const activeConfig = overrideConfig || getBananaSplitLocalConfig(config);
     
     // Check dynamic plugins first
     if (pluginRegistry.providers[activeConfig.provider]) {
@@ -66,6 +66,57 @@ function createProvider(overrideConfig = null) {
             return new OllamaProvider(activeConfig);
     }
 }
+
+function getActiveProviderId() {
+    return config?.bananaSplit?.enabled && config.bananaSplit.local?.provider
+        ? config.bananaSplit.local.provider
+        : config.provider;
+}
+
+function isPortableChatHistory(messages) {
+    return Array.isArray(messages) && messages.every(msg => {
+        return msg && typeof msg === 'object' && !Object.prototype.hasOwnProperty.call(msg, 'parts');
+    });
+}
+
+function replaceProviderForCurrentConfig({ preservePortableHistory = false } = {}) {
+    const savedMessages = providerInstance?.messages;
+    providerInstance = createProvider();
+
+    if (
+        preservePortableHistory &&
+        providerInstance?.messages !== undefined &&
+        getActiveProviderId() !== 'gemini' &&
+        isPortableChatHistory(savedMessages)
+    ) {
+        providerInstance.messages = savedMessages;
+    }
+}
+
+function messageHasToolActivity(message) {
+    if (!message || typeof message !== 'object') return false;
+    if (message.role === 'tool' || message.type === 'function_call_output') return true;
+    if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) return true;
+
+    const content = Array.isArray(message.content) ? message.content : [];
+    if (content.some(part => part?.type === 'tool_use' || part?.type === 'tool_result')) return true;
+
+    const parts = Array.isArray(message.parts) ? message.parts : [];
+    return parts.some(part => part?.functionCall || part?.functionResponse);
+}
+
+function hasToolActivitySince(provider, startIndex) {
+    const messages = provider?.messages;
+    if (!Array.isArray(messages)) return false;
+    return messages.slice(startIndex).some(messageHasToolActivity);
+}
+
+function isEmptyAssistantResponse(responseText) {
+    return typeof responseText !== 'string' || responseText.trim().length === 0;
+}
+
+const EMPTY_TOOL_RESPONSE_CONTINUATION = `SYSTEM: Your previous turn used tools but ended without a final message.
+Continue from the latest tool results and complete the user's request now. If the work is done, give a concise final answer. If another tool call is required, call it. Do not repeat completed tool calls unless the latest tool result shows that is necessary.`;
 
 async function handleSlashCommand(command) {
     const [cmd, ...args] = command.split(' ');
@@ -123,6 +174,9 @@ async function handleSlashCommand(command) {
             break;
         case '/model':
             let newModel = args[0];
+            const isBananaSplitModelChange = config.bananaSplit?.enabled && config.bananaSplit.local?.provider;
+            const modelConfig = isBananaSplitModelChange ? getBananaSplitLocalConfig(config) : config;
+            const activeModelProvider = modelConfig.provider;
             if (!newModel) {
                 // Interactive selection
                 const { select } = await import('@inquirer/prompts');
@@ -130,23 +184,23 @@ async function handleSlashCommand(command) {
 
                 const AUTO_CHOICE = { name: chalk.cyan('⚡ Auto Mode') + chalk.gray(' (AI picks the best model per prompt)'), value: 'auto' };
                 let choices = [];
-                if (config.provider === 'gemini') choices = [AUTO_CHOICE, ...GEMINI_MODELS];
-                else if (config.provider === 'claude') choices = [AUTO_CHOICE, ...CLAUDE_MODELS];
-                else if (config.provider === 'openai') {
-                    const base = config.authType === 'oauth' ? CODEX_MODELS : OPENAI_MODELS;
+                if (activeModelProvider === 'gemini') choices = [AUTO_CHOICE, ...GEMINI_MODELS];
+                else if (activeModelProvider === 'claude') choices = [AUTO_CHOICE, ...CLAUDE_MODELS];
+                else if (activeModelProvider === 'openai') {
+                    const base = modelConfig.authType === 'oauth' ? CODEX_MODELS : OPENAI_MODELS;
                     choices = [AUTO_CHOICE, ...base];
-                } else if (config.provider === 'mistral') {
+                } else if (activeModelProvider === 'mistral') {
                     choices = [AUTO_CHOICE, ...MISTRAL_MODELS];
-                } else if (config.provider === 'openrouter') {
+                } else if (activeModelProvider === 'openrouter') {
                     // Re-run setup flow so the user gets full validation
                     config = await setupProvider('openrouter', config);
                     await saveConfig(config);
                     providerInstance = createProvider();
                     console.log(chalk.green(`Switched OpenRouter model to ${config.model}.`));
                     break;
-                } else if (config.provider === 'ollama_cloud') {
+                } else if (activeModelProvider === 'ollama_cloud') {
                     choices = [AUTO_CHOICE, ...OLLAMA_CLOUD_MODELS];
-                } else if (config.provider === 'ollama') {
+                } else if (activeModelProvider === 'ollama') {
                     try {
                         const response = await fetch('http://localhost:11434/api/tags');
                         const data = await response.json();
@@ -155,9 +209,9 @@ async function handleSlashCommand(command) {
                         console.log(chalk.red("Could not connect to Ollama."));
                         return;
                     }
-                } else if (config.provider === 'lmstudio') {
+                } else if (activeModelProvider === 'lmstudio') {
                     try {
-                        const baseUrl = config.lmStudioBaseUrl || 'http://localhost:1234/v1';
+                        const baseUrl = modelConfig.lmStudioBaseUrl || 'http://localhost:1234/v1';
                         const response = await fetch(`${baseUrl}/models`);
                         const data = await response.json();
                         choices = data.data.map(m => ({ name: m.id, value: m.id }));
@@ -165,14 +219,14 @@ async function handleSlashCommand(command) {
                         console.log(chalk.red("Could not connect to LM Studio."));
                         return;
                     }
-                } else if (pluginRegistry.providers[config.provider] && pluginRegistry.providers[config.provider].ProviderClass) {
+                } else if (pluginRegistry.providers[activeModelProvider] && pluginRegistry.providers[activeModelProvider].ProviderClass) {
                     // Check if provider class has a static getModels method
-                    const ProvClass = pluginRegistry.providers[config.provider].ProviderClass;
+                    const ProvClass = pluginRegistry.providers[activeModelProvider].ProviderClass;
                     if (typeof ProvClass.getModels === 'function') {
                         try {
-                            choices = await ProvClass.getModels(config);
+                            choices = await ProvClass.getModels(modelConfig);
                         } catch (e) {
-                            console.log(chalk.red(`Could not fetch models for plugin provider ${config.provider}: ${e.message}`));
+                            console.log(chalk.red(`Could not fetch models for plugin provider ${activeModelProvider}: ${e.message}`));
                         }
                     } else {
                         choices = [{ name: 'Default Model', value: 'default' }];
@@ -181,7 +235,7 @@ async function handleSlashCommand(command) {
 
                 if (choices.length > 0) {
                     const finalChoices = [...choices];
-                    if (config.provider === 'ollama_cloud' || config.provider === 'mistral') {
+                    if (activeModelProvider === 'ollama_cloud' || activeModelProvider === 'mistral') {
                         finalChoices.push({ name: chalk.magenta('✎ Enter custom model ID...'), value: 'CUSTOM_ID' });
                     }
 
@@ -203,7 +257,7 @@ async function handleSlashCommand(command) {
             }
 
             if (newModel) {
-                if (config.provider === 'openrouter') {
+                if (activeModelProvider === 'openrouter') {
                     // Validate tool calling support before switching
                     console.log(chalk.cyan(`Validating "${newModel}" on OpenRouter...`));
                     try {
@@ -232,14 +286,20 @@ async function handleSlashCommand(command) {
                     console.log(chalk.yellow('It provides 2.5x faster output speeds but will consume your API credits much faster.\n'));
                 }
 
-                config.model = newModel;
+                if (isBananaSplitModelChange) {
+                    config.bananaSplit.local.model = newModel;
+                } else {
+                    config.model = newModel;
+                }
                 await saveConfig(config);
                 if (providerInstance) {
                     providerInstance.modelName = newModel;
+                    providerInstance.config.model = newModel;
                 } else {
                     providerInstance = createProvider();
                 }
-                console.log(chalk.green(`Switched model to ${newModel}.`));
+                const scope = isBananaSplitModelChange ? 'BananaSplit local model' : 'model';
+                console.log(chalk.green(`Switched ${scope} to ${newModel}.`));
             } else {
                 console.log(chalk.yellow(`Usage: /model <model_name> (or just /model for selection)`));
             }
@@ -685,6 +745,48 @@ async function handleSlashCommand(command) {
             }
             console.log(chalk.green(`🛡️  Banana Guard ${config.useBananaGuard ? 'enabled. AI will auto-approve safe commands.' : 'disabled. All commands require manual approval.'}`));
             break;
+        case '/bananasplit': {
+            const subCmd = (args[0] || '').toLowerCase();
+
+            if (subCmd === 'disable' || subCmd === 'off') {
+                if (!config.bananaSplit?.enabled) {
+                    console.log(chalk.yellow('BananaSplit is already disabled.'));
+                    break;
+                }
+
+                config.bananaSplit.enabled = false;
+                await saveConfig(config);
+                global.bananaConfig = config;
+                replaceProviderForCurrentConfig({ preservePortableHistory: true });
+                console.log(chalk.green('BananaSplit disabled. Returning to your normal provider.'));
+                break;
+            }
+
+            if (subCmd && !['setup', 'configure'].includes(subCmd)) {
+                console.log(chalk.yellow('Usage: /bananasplit [disable|setup]'));
+                break;
+            }
+
+            const shouldConfigure = !config.bananaSplit?.local ||
+                !config.bananaSplit?.reviewer ||
+                ['setup', 'configure'].includes(subCmd) ||
+                (config.bananaSplit?.enabled && !subCmd);
+
+            if (shouldConfigure) {
+                config = await setupBananaSplit(config);
+            } else {
+                config.bananaSplit.enabled = true;
+            }
+
+            await saveConfig(config);
+            global.bananaConfig = config;
+            replaceProviderForCurrentConfig({ preservePortableHistory: true });
+
+            const local = config.bananaSplit.local;
+            const reviewer = config.bananaSplit.reviewer;
+            console.log(chalk.green(`BananaSplit enabled. Local: ${local.provider}/${local.model}. Reviewer: ${reviewer.provider}/${reviewer.model}.`));
+            break;
+        }
         case '/style': {
             const { select: styleSelect } = await import('@inquirer/prompts');
             const selectedStyle = await styleSelect({
@@ -749,11 +851,34 @@ async function handleSlashCommand(command) {
             break;
         }
         case '/effort': {
-            if (config.provider !== 'claude') {
-                console.log(chalk.yellow("The /effort command is currently only supported for Claude models."));
+            const { select: effortSelect } = await import('@inquirer/prompts');
+
+            if (config.provider === 'openai' && config.authType === 'oauth') {
+                const selectedEffort = await effortSelect({
+                    message: `Select OpenAI Codex reasoning effort for ${config.model || 'current model'}:`,
+                    choices: [
+                        { name: 'Low (faster and cheaper)', value: 'low' },
+                        { name: 'Medium (balanced default)', value: 'medium' },
+                        { name: 'High (hard reasoning and complex coding)', value: 'high' },
+                        { name: 'Extra-High (deepest reasoning, highest cost/latency)', value: 'xhigh' }
+                    ],
+                    default: config.openaiCodexEffort || 'medium',
+                    loop: false
+                });
+
+                config.openaiCodexEffort = selectedEffort;
+                await saveConfig(config);
+                if (providerInstance) {
+                    providerInstance.config.openaiCodexEffort = selectedEffort;
+                }
+                console.log(chalk.green(`OpenAI Codex reasoning effort updated to: ${selectedEffort.toUpperCase()}`));
                 break;
             }
-            const { select: effortSelect } = await import('@inquirer/prompts');
+
+            if (config.provider !== 'claude') {
+                console.log(chalk.yellow("The /effort command is currently only supported for Claude models and OpenAI Codex OAuth."));
+                break;
+            }
 
             const currentModel = providerInstance ? providerInstance.modelName : (config.model || '');
             const isAdvancedModel = currentModel.includes('opus-4') || currentModel.includes('sonnet-4');
@@ -1002,10 +1127,11 @@ Available commands:
   /skill-creator   - Enable Skill Creator Mode (AI helps you create custom skills)
   /deepreview      - Enable DeepReview mode (Full codebase audit OR git diff review, no edits)
   /guard           - Toggle Banana Guard (AI auto-approve safe commands)
+  /bananasplit     - Toggle BananaSplit local coding with cloud review (/bananasplit disable to turn off)
   /yolo            - Toggle YOLO mode (skip all permission requests)
   /style           - Change AI writing style (Formal, Explanatory, etc)
   /emoji           - Change AI emoji usage (Normal, Minimal, More)
-  /effort          - Change Claude reasoning effort (low, medium, high, xhigh, max)
+  /effort          - Change Claude or OpenAI Codex OAuth reasoning effort
   /debug           - Toggle debug mode (show tool results)
   /plugin          - Manage plugins (add, remove, list)
   /help            - Show all commands
@@ -1165,12 +1291,13 @@ function drawPromptBox(inputText, cursorPos) {
     // Redraw status bar and separator (they are always below the prompt)
     const rawModel = providerInstance ? providerInstance.modelName : (config.model || 'unknown');
     const modelDisplay = rawModel === 'auto' ? chalk.cyan('[AUTO]') : rawModel;
-    const providerDisplay = config.provider.toUpperCase();
+    const providerDisplay = getActiveProviderId().toUpperCase();
     let modeDisplay = chalk.green('AGENT MODE');
     if (config.askMode) modeDisplay = chalk.blue('ASK MODE');
     else if (config.securityMode) modeDisplay = chalk.red('SECURITY MODE');
     else if (config.planMode) modeDisplay = chalk.magenta('PLAN MODE');
     else if (config.skillCreatorMode) modeDisplay = chalk.cyan('SKILL CREATOR MODE');
+    const bananaSplitDisplay = config.bananaSplit?.enabled ? ` / ${chalk.magenta('BananaSplit Active')}` : '';
 
     let tokenDisplay = '';
     if (config.showTokenCount && providerInstance) {
@@ -1197,7 +1324,7 @@ function drawPromptBox(inputText, cursorPos) {
     }
 
     const yoloDisplay = config.yolo ? chalk.bgRed.white.bold(' YOLO ') : '';
-    const leftText = ` Provider: ${chalk.cyan(providerDisplay)} / Model: ${chalk.yellow(modelDisplay)} / ${modeDisplay}${tokenDisplay}${costDisplay}${yoloDisplay ? ' / ' + yoloDisplay : ''}`;
+    const leftText = ` Provider: ${chalk.cyan(providerDisplay)} / Model: ${chalk.yellow(modelDisplay)} / ${modeDisplay}${bananaSplitDisplay}${tokenDisplay}${costDisplay}${yoloDisplay ? ' / ' + yoloDisplay : ''}`;
     const rightText = '/help for shortcuts ';
     const leftStripped = leftText.replace(/\x1b\[[0-9;]*m/g, '');
     const midPad = Math.max(0, width - leftStripped.length - rightText.length);
@@ -1252,12 +1379,13 @@ function drawPromptBoxInitial(inputText) {
     // Status bar: Current Provider / Model + right-aligned "/help for shortcuts"
     const rawModel = providerInstance ? providerInstance.modelName : (config.model || 'unknown');
     const modelDisplay = rawModel === 'auto' ? chalk.cyan('[AUTO]') : rawModel;
-    const providerDisplay = config.provider.toUpperCase();
+    const providerDisplay = getActiveProviderId().toUpperCase();
     let modeDisplay = chalk.green('AGENT MODE');
     if (config.askMode) modeDisplay = chalk.blue('ASK MODE');
     else if (config.securityMode) modeDisplay = chalk.red('SECURITY MODE');
     else if (config.planMode) modeDisplay = chalk.magenta('PLAN MODE');
     else if (config.skillCreatorMode) modeDisplay = chalk.cyan('SKILL CREATOR MODE');
+    const bananaSplitDisplay = config.bananaSplit?.enabled ? ` / ${chalk.magenta('BananaSplit Active')}` : '';
 
     let tokenDisplay = '';
     if (config.showTokenCount && providerInstance) {
@@ -1284,7 +1412,7 @@ function drawPromptBoxInitial(inputText) {
     }
 
     const yoloDisplay = config.yolo ? chalk.bgRed.white.bold(' YOLO ') : '';
-    const leftText = ` Provider: ${chalk.cyan(providerDisplay)} / Model: ${chalk.yellow(modelDisplay)} / ${modeDisplay}${tokenDisplay}${costDisplay}${yoloDisplay ? ' / ' + yoloDisplay : ''}`;
+    const leftText = ` Provider: ${chalk.cyan(providerDisplay)} / Model: ${chalk.yellow(modelDisplay)} / ${modeDisplay}${bananaSplitDisplay}${tokenDisplay}${costDisplay}${yoloDisplay ? ' / ' + yoloDisplay : ''}`;
     const rightText = '/help for shortcuts ';
 
     const leftStripped = leftText.replace(/\x1b\[[0-9;]*m/g, '');
@@ -1727,11 +1855,25 @@ async function main() {
                 process.stdout.write(chalk.cyan('✦ '));
                 global.isAiSpeaking = true;
                 let responseText;
+                const messageCountBeforeResponse = Array.isArray(providerInstance.messages) ? providerInstance.messages.length : 0;
                 resetRemoteAiResponseTracking();
                 try {
                     responseText = await providerInstance.sendMessage({ text: modifiedInput, images: attachedImages });
                 } finally {
                     global.isAiSpeaking = false;
+                }
+
+                if (
+                    isEmptyAssistantResponse(responseText) &&
+                    hasToolActivitySince(providerInstance, messageCountBeforeResponse)
+                ) {
+                    console.log(chalk.gray('\n(Model returned no final message after tool use; asking it to continue...)'));
+                    global.isAiSpeaking = true;
+                    try {
+                        responseText = await providerInstance.sendMessage(EMPTY_TOOL_RESPONSE_CONTINUATION);
+                    } finally {
+                        global.isAiSpeaking = false;
+                    }
                 }
 
                 // Execute onAfterMessage lifecycle hooks
@@ -1763,10 +1905,11 @@ async function main() {
                         const titlePrompt = "SYSTEM: You are a title generator. Based on this conversation, provide a VERY SHORT (2-5 words) title. Reply ONLY with the title string, no quotes or formatting.";
 
                         const { AUTO_ROUTER_MODELS } = await import('./utils/autoModel.js');
-                        let titleModel = config.model;
+                        const titleBaseConfig = getBananaSplitLocalConfig(config);
+                        let titleModel = titleBaseConfig.model;
 
-                        let providerKey = config.provider;
-                        if (providerKey === 'openai' && config.authType === 'oauth') {
+                        let providerKey = titleBaseConfig.provider;
+                        if (providerKey === 'openai' && titleBaseConfig.authType === 'oauth') {
                             providerKey = 'openai_oauth';
                         }
 
@@ -1775,7 +1918,15 @@ async function main() {
                         }
 
                         // Use isApiMode to keep the title generation completely silent
-                        const titleConfig = { ...config, isApiMode: true, model: titleModel };
+                        const titleConfig = {
+                            ...titleBaseConfig,
+                            bananaSplit: {
+                                ...titleBaseConfig.bananaSplit,
+                                enabled: false
+                            },
+                            isApiMode: true,
+                            model: titleModel
+                        };
                         const titleProvider = createProvider(titleConfig);
 
                         // Deep copy messages so the AI knows the context, but modifications don't leak back
@@ -1796,8 +1947,8 @@ async function main() {
 
                 // Save session after AI message
                 await saveSession(currentSessionId, {
-                    provider: config.provider,
-                    model: config.model || providerInstance.modelName,
+                    provider: getActiveProviderId(),
+                    model: providerInstance.modelName || config.model,
                     messages: providerInstance.messages,
                     title: currentSessionTitle
                 });

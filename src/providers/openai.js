@@ -12,6 +12,14 @@ import { OPENAI_MODELS, CODEX_MODELS } from '../constants.js';
 import { AUTO_MODEL_DESCRIPTIONS, AUTO_ROUTER_MODELS, buildRoutingPrompt, parseRoutingResponse, openAIMessagesToAutoRouterHistory } from '../utils/autoModel.js';
 import { sendRemoteAiSegment } from '../remote.js';
 
+const CODEX_REASONING_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
+
+function getCodexReasoningEffort(config) {
+    return CODEX_REASONING_EFFORTS.has(config.openaiCodexEffort)
+        ? config.openaiCodexEffort
+        : 'medium';
+}
+
 /**
  * Notice: Parts of the OAuth authentication flow and SSE streaming logic in this file 
  * are derived from or inspired by the 'opencode-openai-codex-auth' package 
@@ -116,7 +124,7 @@ export class OpenAIProvider {
                     store: false,
                     stream: true,
                     include: ["reasoning.encrypted_content"],
-                    reasoning: { effort: "medium", summary: "auto" },
+                    reasoning: { effort: getCodexReasoningEffort(this.config), summary: "auto" },
                     text: { verbosity: "low" }
                 };
                 
@@ -518,7 +526,7 @@ export class OpenAIProvider {
                     store: false,
                     stream: true,
                     include: ["reasoning.encrypted_content"],
-                    reasoning: { effort: "medium", summary: "auto" },
+                    reasoning: { effort: getCodexReasoningEffort(this.config), summary: "auto" },
                     text: { verbosity: "medium" }
                 };
 

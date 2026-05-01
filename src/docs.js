@@ -13,13 +13,14 @@ Type these into the chat to control the app:
 - /model      : Change the model for the current provider (e.g., claude-sonnet-4.6).
 - /clean      : Summarize the current chat history to save tokens and clear "clutter".
 - /context    : Show current token usage and context breakdown.
-- /effort     : Set Claude reasoning effort (low, medium, high, xhigh, max).
+- /effort     : Set Claude or OpenAI Codex OAuth reasoning effort.
 - /plan       : Enable Plan Mode (AI proposes a plan before writing code).
 - /agent      : Enable Agent Mode (AI writes code directly - Default).
 - /ask        : Enable Ask Mode (Read-only, AI cannot edit files).
 - /security   : Enable Security Mode (AI focuses on finding vulnerabilities).
 - /skill-creator: Enable Skill Creator Mode (AI helps you write custom Agent Skills).
 - /guard      : Toggle Banana Guard (AI auto-approve for safe commands).
+- /bananasplit: Enable BananaSplit, using a local coding model plus a cloud review model. Use '/bananasplit disable' to turn it off.
 - /yolo       : Toggle YOLO mode (Auto-approve all tool permissions).
 - /settings   : Manage features like Auto-feed workspace, Syntax highlighting, and Memory.
 - /beta       : Enable beta features like MCP (Model Context Protocol) and search tools.
@@ -42,6 +43,7 @@ Type these into the chat to control the app:
 
 ## 🧠 Key Features
 - Multi-Provider: Switch between the best models on the fly.
+- BananaSplit: Run cheaper local coding turns with Ollama or LM Studio, then call a non-local cloud model through 'bananasplit_review' to review and directly fix issues.
 - Sub-Agents: Use 'delegate_task' to spawn researchers, coders, or reviewers.
 - MCP Support: Connect to external tools like databases, GitHub, or browsers via Model Context Protocol.
 - Self-Healing: If a command fails, the AI automatically reads the error and tries to fix it.

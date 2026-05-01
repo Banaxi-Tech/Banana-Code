@@ -93,6 +93,19 @@ Delegation is highly recommended for tasks that would otherwise bloat your curre
 `;
     }
 
+    if (config.bananaSplit?.enabled) {
+        prompt += `
+\n# BananaSplit
+BananaSplit is active. You are running as the local coding model, and a separate cloud reviewer is available through the \`bananasplit_review\` tool.
+- After meaningful code changes, call \`bananasplit_review\` with a concise summary of what you changed, the changed files, and any areas you want checked.
+- The reviewer automatically sees your recent tool calls and tool results. Keep the review focused on what you did in this turn.
+- Only set \`extraContextReason\` when the reviewer needs broader git diff context to judge the change; include the concrete reason.
+- The cloud reviewer can directly patch real bugs it finds. If it reports fixes applied, do not reapply them; inspect or continue only if needed.
+- If the reviewer reports remaining guidance, address it before giving your final answer.
+- Do not call the reviewer for simple explanations, planning-only responses, tiny typo fixes, or other work where a second model review would not add value.
+`;
+    }
+
     if (config.planMode) {
         prompt += `
 [PLAN MODE ENABLED]

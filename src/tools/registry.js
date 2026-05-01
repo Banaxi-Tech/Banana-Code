@@ -16,6 +16,7 @@ import { duckDuckGoScrape } from './duckDuckGoScrape.js';
 import { patchFile } from './patchFile.js';
 import { activateSkill } from './activateSkill.js';
 import { delegateTask } from './delegateTask.js';
+import { bananasplitReview } from './bananasplitReview.js';
 import { renameFile } from './renameFile.js';
 import { mcpManager } from '../utils/mcp.js';
 import { saveMemoryTool, listMemoryTool, deleteMemoryTool } from './memoryTools.js';
@@ -251,6 +252,34 @@ export const TOOLS = [
         }
     },
     {
+        name: 'bananasplit_review',
+        label: 'BananaSplit Cloud Review',
+        description: 'Ask the configured BananaSplit cloud model to review the local model\'s recent actions and directly fix real bugs before finalizing.',
+        parameters: {
+            type: 'object',
+            properties: {
+                summary: {
+                    type: 'string',
+                    description: 'Concise summary of what was changed or implemented and what should be reviewed.'
+                },
+                changedFiles: {
+                    type: 'array',
+                    description: 'Optional list of files changed by the local model.',
+                    items: { type: 'string' }
+                },
+                concerns: {
+                    type: 'string',
+                    description: 'Optional specific areas the reviewer should focus on.'
+                },
+                extraContextReason: {
+                    type: 'string',
+                    description: 'Optional reason to include broader git diff context. Leave empty unless the local activity log is not enough to review the change.'
+                }
+            },
+            required: ['summary']
+        }
+    },
+    {
         name: 'save_memory',
         description: 'Persists a fact across ALL future sessions globally. Use this ONLY to save facts or preferences you want to permanently remember across different projects. Do NOT use for session-specific or temporary data.',
         memoryFeature: true,
@@ -300,6 +329,14 @@ export const TOOLS = [
 
 export function getAvailableTools(config = {}) {
     let available = TOOLS.filter(tool => {
+        if (tool.name === 'bananasplit_review' && config.bananaSplit?.enabled !== true) return false;
+        if (config.bananaSplitReviewerMode) {
+            const allowedForBananaSplitReview = [
+                'read_file', 'read_many_files', 'search_files',
+                'list_directory', 'patch_file', 'write_file', 'get_banana_docs'
+            ];
+            if (!allowedForBananaSplitReview.includes(tool.name)) return false;
+        }
         if (config.askMode) {
             const forbiddenInAskMode = ['write_file', 'patch_file'];
             if (forbiddenInAskMode.includes(tool.name)) return false;
@@ -404,6 +441,7 @@ export async function executeTool(name, args, config) {
         case 'patch_file': return await patchFile(args);
         case 'activate_skill': return await activateSkill(args);
         case 'delegate_task': return await delegateTask(args, config);
+        case 'bananasplit_review': return await bananasplitReview(args, config);
         case 'save_memory': return await saveMemoryTool(args);
         case 'list_memory': return await listMemoryTool(args);
         case 'delete_memory': return await deleteMemoryTool(args);

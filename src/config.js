@@ -193,6 +193,143 @@ export async function saveConfig(config) {
     }
 }
 
+function copyBananaSplitProviderConfig(provider, providerConfig) {
+    const result = {
+        provider,
+        model: providerConfig.model
+    };
+
+    if (provider === 'lmstudio') {
+        result.lmStudioBaseUrl = providerConfig.lmStudioBaseUrl;
+    }
+
+    if (providerConfig.apiKey) {
+        result.apiKey = providerConfig.apiKey;
+    }
+
+    if (provider === 'openai') {
+        result.authType = providerConfig.authType || 'api_key';
+        if (result.authType === 'oauth') {
+            result.openaiCodexEffort = providerConfig.openaiCodexEffort || 'medium';
+        }
+    }
+
+    if (provider === 'claude') {
+        result.useExtendedCache = providerConfig.useExtendedCache;
+        result.claudeEffort = providerConfig.claudeEffort;
+    }
+
+    return result;
+}
+
+export function getBananaSplitLocalConfig(config) {
+    const local = config?.bananaSplit?.local;
+    if (!config?.bananaSplit?.enabled || !local?.provider) {
+        return config;
+    }
+
+    return {
+        ...config,
+        ...local,
+        provider: local.provider,
+        model: local.model
+    };
+}
+
+export function getBananaSplitReviewerConfig(config) {
+    const reviewer = config?.bananaSplit?.reviewer;
+    if (!reviewer?.provider) {
+        return null;
+    }
+
+    return {
+        ...config,
+        ...reviewer,
+        provider: reviewer.provider,
+        model: reviewer.model,
+        bananaSplit: {
+            ...config.bananaSplit,
+            enabled: false
+        },
+        bananaSplitReviewerMode: true,
+        isApiMode: true,
+        useMarkedTerminal: false,
+        debug: false
+    };
+}
+
+export async function setupBananaSplit(config = {}) {
+    const existing = config.bananaSplit || {};
+
+    console.log(chalk.cyan('\nBananaSplit pairs a local coding model with a cloud review model.'));
+
+    const localProvider = await select({
+        message: 'Select the local model provider BananaSplit should use for coding:',
+        choices: [
+            { name: 'Ollama (Local)', value: 'ollama' },
+            { name: 'LM Studio (Local)', value: 'lmstudio' }
+        ],
+        default: existing.local?.provider || 'ollama',
+        loop: false
+    });
+
+    const localSetup = await setupProvider(localProvider, {
+        provider: localProvider,
+        model: existing.local?.model,
+        lmStudioBaseUrl: existing.local?.lmStudioBaseUrl || config.lmStudioBaseUrl
+    });
+
+    const reviewerChoices = [
+        { name: 'Google Gemini', value: 'gemini' },
+        { name: 'Anthropic Claude', value: 'claude' },
+        { name: 'OpenAI', value: 'openai' },
+        { name: 'Mistral AI', value: 'mistral' },
+        { name: 'OpenRouter (Any Model)', value: 'openrouter' },
+        { name: 'Ollama Cloud', value: 'ollama_cloud' }
+    ];
+    const reviewerDefault = reviewerChoices.some(choice => choice.value === existing.reviewer?.provider)
+        ? existing.reviewer.provider
+        : 'gemini';
+    const reviewerProvider = await select({
+        message: 'Select the cloud provider BananaSplit should use for review:',
+        choices: reviewerChoices,
+        default: reviewerDefault,
+        loop: false
+    });
+
+    const reviewerSetup = await setupProvider(reviewerProvider, {
+        provider: reviewerProvider,
+        model: existing.reviewer?.model,
+        apiKey: existing.reviewer?.apiKey || (config.provider === reviewerProvider ? config.apiKey : undefined),
+        authType: existing.reviewer?.authType || (config.provider === reviewerProvider ? config.authType : undefined),
+        openaiCodexEffort: existing.reviewer?.openaiCodexEffort || (config.provider === reviewerProvider ? config.openaiCodexEffort : undefined),
+        useExtendedCache: existing.reviewer?.useExtendedCache ?? (config.provider === reviewerProvider ? config.useExtendedCache : undefined),
+        claudeEffort: existing.reviewer?.claudeEffort ?? (config.provider === reviewerProvider ? config.claudeEffort : undefined)
+    });
+
+    if (reviewerProvider === 'openai' && reviewerSetup.authType === 'oauth') {
+        reviewerSetup.openaiCodexEffort = await select({
+            message: 'Select OpenAI Codex reasoning effort for BananaSplit review/fix:',
+            choices: [
+                { name: 'Low (faster and cheaper)', value: 'low' },
+                { name: 'Medium (balanced default)', value: 'medium' },
+                { name: 'High (hard reasoning and complex fixes)', value: 'high' },
+                { name: 'Extra-High (deepest reasoning, highest cost/latency)', value: 'xhigh' }
+            ],
+            default: reviewerSetup.openaiCodexEffort || 'medium',
+            loop: false
+        });
+    }
+
+    config.bananaSplit = {
+        enabled: true,
+        local: copyBananaSplitProviderConfig(localProvider, localSetup),
+        reviewer: copyBananaSplitProviderConfig(reviewerProvider, reviewerSetup)
+    };
+
+    return config;
+}
+
 export async function setupProvider(provider, config = {}) {
     config.provider = provider;
 
