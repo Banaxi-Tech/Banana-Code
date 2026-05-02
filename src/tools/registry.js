@@ -19,7 +19,7 @@ import { delegateTask } from './delegateTask.js';
 import { bananasplitReview } from './bananasplitReview.js';
 import { renameFile } from './renameFile.js';
 import { mcpManager } from '../utils/mcp.js';
-import { saveMemoryTool, listMemoryTool, deleteMemoryTool } from './memoryTools.js';
+import { saveMemoryTool, listMemoryTool, deleteMemoryTool, saveProjectMemoryTool, listProjectMemoryTool, deleteProjectMemoryTool } from './memoryTools.js';
 import { pluginRegistry } from '../utils/plugins.js';
 
 export const TOOLS = [
@@ -302,6 +302,40 @@ export const TOOLS = [
         }
     },
     {
+        name: 'save_project_memory',
+        description: 'Persists a fact for the current project only, stored in this workspace. Use this for repo-specific conventions, architecture decisions, commands, naming rules, and other facts that should NOT apply globally.',
+        memoryFeature: true,
+        parameters: {
+            type: 'object',
+            properties: {
+                fact: { type: 'string', description: 'A concise project-specific fact to remember for this workspace only.' }
+            },
+            required: ['fact']
+        }
+    },
+    {
+        name: 'list_project_memory',
+        description: 'Retrieves all memories saved for the current project with their IDs. Use this to review project-only facts or find an ID to delete an outdated project memory.',
+        memoryFeature: true,
+        parameters: {
+            type: 'object',
+            properties: {},
+            required: []
+        }
+    },
+    {
+        name: 'delete_project_memory',
+        description: 'Deletes a specific project memory using its ID. Call list_project_memory first to find the ID.',
+        memoryFeature: true,
+        parameters: {
+            type: 'object',
+            properties: {
+                id: { type: 'string', description: 'The exact ID of the project memory to delete.' }
+            },
+            required: ['id']
+        }
+    },
+    {
         name: 'delete_memory',
         description: 'Deletes a specific global memory using its ID. Call list_memory first to find the ID.',
         memoryFeature: true,
@@ -445,6 +479,9 @@ export async function executeTool(name, args, config) {
         case 'save_memory': return await saveMemoryTool(args);
         case 'list_memory': return await listMemoryTool(args);
         case 'delete_memory': return await deleteMemoryTool(args);
+        case 'save_project_memory': return await saveProjectMemoryTool(args);
+        case 'list_project_memory': return await listProjectMemoryTool(args);
+        case 'delete_project_memory': return await deleteProjectMemoryTool(args);
         case 'rename_file': return await renameFile(args);
         default: return `Unknown tool: ${name}`;
     }

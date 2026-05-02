@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Banaxi
 
-import { addMemory, removeMemory, loadMemory } from '../utils/memory.js';
+import { addMemory, removeMemory, loadMemory, addProjectMemory, removeProjectMemory, loadProjectMemory } from '../utils/memory.js';
 import chalk from 'chalk';
 import ora from 'ora';
 
@@ -14,6 +14,18 @@ export async function saveMemoryTool({ fact }) {
     } catch (err) {
         spinner.stop();
         return `Error saving memory: ${err.message}`;
+    }
+}
+
+export async function saveProjectMemoryTool({ fact }) {
+    const spinner = ora({ text: `Saving project memory...`, color: 'magenta', stream: process.stdout }).start();
+    try {
+        const id = await addProjectMemory(fact);
+        spinner.stop();
+        return `Successfully saved project fact. ID: ${id}`;
+    } catch (err) {
+        spinner.stop();
+        return `Error saving project memory: ${err.message}`;
     }
 }
 
@@ -32,6 +44,21 @@ export async function listMemoryTool() {
     }
 }
 
+export async function listProjectMemoryTool() {
+    const spinner = ora({ text: `Reading project memories...`, color: 'magenta', stream: process.stdout }).start();
+    try {
+        const memories = await loadProjectMemory();
+        spinner.stop();
+        if (memories.length === 0) {
+            return `No project memories currently saved.`;
+        }
+        return JSON.stringify(memories, null, 2);
+    } catch (err) {
+        spinner.stop();
+        return `Error listing project memories: ${err.message}`;
+    }
+}
+
 export async function deleteMemoryTool({ id }) {
     const spinner = ora({ text: `Deleting memory ${id}...`, color: 'magenta', stream: process.stdout }).start();
     try {
@@ -45,5 +72,21 @@ export async function deleteMemoryTool({ id }) {
     } catch (err) {
         spinner.stop();
         return `Error deleting memory: ${err.message}`;
+    }
+}
+
+export async function deleteProjectMemoryTool({ id }) {
+    const spinner = ora({ text: `Deleting project memory ${id}...`, color: 'magenta', stream: process.stdout }).start();
+    try {
+        const success = await removeProjectMemory(id);
+        spinner.stop();
+        if (success) {
+            return `Successfully deleted project memory with ID: ${id}`;
+        } else {
+            return `Error: Project memory with ID '${id}' not found.`;
+        }
+    } catch (err) {
+        spinner.stop();
+        return `Error deleting project memory: ${err.message}`;
     }
 }

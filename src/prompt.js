@@ -53,9 +53,9 @@ Always use tools when they would help. Be concise but thorough. `;
         }
     } catch (e) {}
 
-    // Load Global Memory
+    // Load Memory
     if (config.useMemory !== false) {
-        prompt += `\n\n# Global AI Memory\nYou have the ability to remember facts across ALL sessions and projects using the \`save_memory\` tool. If the user tells you their name, personal preferences, coding rules, or other information they might want to persist, feel free to use the \`save_memory\` tool so you can remember it in the future.\n`;
+        prompt += `\n\n# AI Memory\nYou have two separate memory tools:\n- Use \`save_project_memory\` for repo-specific conventions, architecture decisions, commands, naming rules, and other facts that should persist only in this project.\n- Use \`save_memory\` only for user-wide preferences that should apply across all projects.\nDo not save project-only facts to global memory.\n`;
         
         try {
             const memPath = path.join(os.homedir(), '.config', 'banana-code', 'memory.json');
@@ -63,8 +63,22 @@ Always use tools when they would help. Be concise but thorough. `;
                 const memData = fs.readFileSync(memPath, 'utf8');
                 const memories = JSON.parse(memData);
                 if (memories.length > 0) {
-                    prompt += `You have persistently saved the following facts and preferences across ALL projects. Always adhere to these preferences:\n`;
+                    prompt += `\n## Global AI Memory\nYou have persistently saved the following facts and preferences across ALL projects. Always adhere to these preferences:\n`;
                     for (const m of memories) {
+                        prompt += `- ${m.fact}\n`;
+                    }
+                }
+            }
+        } catch (e) {}
+
+        try {
+            const projectMemPath = path.join(process.cwd(), '.banana', 'project-memory.json');
+            if (fs.existsSync(projectMemPath)) {
+                const projectMemData = fs.readFileSync(projectMemPath, 'utf8');
+                const projectMemories = JSON.parse(projectMemData);
+                if (projectMemories.length > 0) {
+                    prompt += `\n## Project AI Memory\nYou have persistently saved the following facts for this project only. Follow them in this workspace, but do not treat them as global user preferences:\n`;
+                    for (const m of projectMemories) {
                         prompt += `- ${m.fact}\n`;
                     }
                 }
