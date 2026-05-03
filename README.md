@@ -128,7 +128,7 @@ While in a chat, use these special commands (type `/help` for the full list):
 | `/clear` | Clear the current conversation (same provider/model). |
 | `/clean` | Summarize long history into a short memory to save tokens (beta; enable in `/beta`). |
 | `/context` | Show message count and estimated tokens. |
-| `/settings` | Workspace auto-feed, markdown/syntax output, patch tool, token count in status bar, global memory. |
+| `/settings` | Workspace auto-feed, markdown/syntax output, patch tool, token count, global memory, optional Puppeteer URL fetch. |
 | `/beta` | Beta tools (e.g. MCP, optional scrapers, `/clean`). |
 | `/memory` | View, add, or delete global memories (needs memory enabled in `/settings`). |
 | `/skills` | List loaded Agent Skills from `~/.config/banana-code/skills/`. |
@@ -230,7 +230,7 @@ Banana Code can assist you by:
 - **`read_file`**: Reading local source code.
 - **`write_file`**: Creating or editing files.
 - **`patch_file`**: Targeted search-and-replace style edits.
-- **`fetch_url`**: Browsing web documentation.
+- **`fetch_url`**: Browsing web documentation. Enable Puppeteer fetch in `/settings` to render JavaScript-driven pages; Puppeteer is installed into Banana Code's config directory on first use.
 - **`search_files`**: Performing regex searches across your project.
 - **`list_directory`**: Exploring folder structures.
 - **`get_banana_docs`**: Reading internal app documentation to answer user questions.

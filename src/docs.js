@@ -22,7 +22,7 @@ Type these into the chat to control the app:
 - /guard      : Toggle Banana Guard (AI auto-approve for safe commands).
 - /bananasplit: Enable BananaSplit, using a local coding model plus a cloud review model. Use '/bananasplit disable' to turn it off.
 - /yolo       : Toggle YOLO mode (Auto-approve all tool permissions).
-- /settings   : Manage features like Auto-feed workspace, Syntax highlighting, and Memory.
+- /settings   : Manage features like Auto-feed workspace, Syntax highlighting, Memory, and optional Puppeteer URL fetch.
 - /beta       : Enable beta features like MCP (Model Context Protocol) and search tools.
 - /memory     : View or manage global AI memories.
 - /skills     : List loaded agent skills (custom expert behaviors).

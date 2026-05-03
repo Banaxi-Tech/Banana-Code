@@ -118,7 +118,7 @@ export const TOOLS = [
     },
     {
         name: 'fetch_url',
-        description: 'Fetch the text content of a URL via HTTP GET.',
+        description: 'Fetch the text content of a URL via HTTP GET. If Puppeteer fetch is enabled in settings, renders the page first so JavaScript content is available.',
         parameters: {
             type: 'object',
             properties: {
@@ -466,7 +466,7 @@ export async function executeTool(name, args, config) {
         case 'read_file': return await readFile(args);
         case 'read_many_files': return await readManyFiles(args);
         case 'write_file': return await writeFile(args);
-        case 'fetch_url': return await fetchUrl(args);
+        case 'fetch_url': return await fetchUrl(args, config);
         case 'search_files': return await searchFiles(args);
         case 'create_directory': return await createDirectory(args);
         case 'list_directory': return await listDirectory(args);

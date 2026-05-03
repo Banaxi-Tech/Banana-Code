@@ -556,6 +556,11 @@ async function handleSlashCommand(command) {
                         name: 'Enable UltraMemory (Scans chats in background, HIGH API USAGE)',
                         value: 'useUltraMemory',
                         checked: config.useUltraMemory || false
+                    },
+                    {
+                        name: 'Use Puppeteer for fetch_url (renders JavaScript; downloads browser on first use)',
+                        value: 'usePuppeteerFetch',
+                        checked: config.usePuppeteerFetch || false
                     }
                 ],
                 loop: false,
@@ -577,6 +582,18 @@ async function handleSlashCommand(command) {
                 }
             }
 
+            if (enabledSettings.includes('usePuppeteerFetch') && !config.usePuppeteerFetch) {
+                console.log(chalk.yellow('\nPuppeteer fetch renders JavaScript pages by installing Puppeteer into your Banana Code config directory on first use.'));
+                console.log(chalk.yellow('This can download a Chromium browser and use additional disk space and network bandwidth.'));
+
+                const agreed = await settingsConfirm({ message: 'Enable Puppeteer for fetch_url?' });
+                if (!agreed) {
+                    const idx = enabledSettings.indexOf('usePuppeteerFetch');
+                    if (idx > -1) enabledSettings.splice(idx, 1);
+                    console.log(chalk.yellow('Puppeteer fetch was not enabled.'));
+                }
+            }
+
             config.autoFeedWorkspace = enabledSettings.includes('autoFeedWorkspace');
             config.useMarkedTerminal = enabledSettings.includes('useMarkedTerminal');
             config.usePatchFile = enabledSettings.includes('usePatchFile');
@@ -585,6 +602,7 @@ async function handleSlashCommand(command) {
             config.useBananaGuard = enabledSettings.includes('useBananaGuard');
             config.useExtendedCache = enabledSettings.includes('useExtendedCache');
             config.useUltraMemory = enabledSettings.includes('useUltraMemory');
+            config.usePuppeteerFetch = enabledSettings.includes('usePuppeteerFetch');
 
             await saveConfig(config);
             if (providerInstance) {
