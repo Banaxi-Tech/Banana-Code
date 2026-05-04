@@ -27,6 +27,7 @@ import { startApiServer } from './server.js';
 import { loadPlugins, pluginRegistry, installPlugin, removePlugin, getConfiguredPlugins } from './utils/plugins.js';
 import { connectRemoteTooling, disconnectRemoteTooling, finalizeTurn, redeemRemotePairingCode, resetRemoteAiResponseTracking, sendRemoteAiMessage } from './remote.js';
 import { promptToMergeExternalAgentInstructions } from './utils/projectInstructions.js';
+import { extractUltrathinkDirective, isUltrathinkMention, providerSupportsUltrathink, rainbowUltrathink, styleUltrathinkMentions } from './utils/ultrathink.js';
 
 let config;
 let providerInstance;
@@ -1204,6 +1205,22 @@ function padLine(text, width) {
     return text + ' '.repeat(pad);
 }
 
+let ultrathinkAnimationFrame = 0;
+
+function isUltrathinkRainbowEnabled() {
+    try {
+        return providerSupportsUltrathink(getBananaSplitLocalConfig(config));
+    } catch (e) {
+        return false;
+    }
+}
+
+function stylePromptSegment(segment, isEmpty) {
+    if (isEmpty) return chalk.gray(segment);
+    if (!isUltrathinkRainbowEnabled()) return chalk.white(segment);
+    return styleUltrathinkMentions(segment, chalk.white, ultrathinkAnimationFrame);
+}
+
 function playHistory(session) {
     process.stdout.write('\x1bc'); // Clear screen
     console.log(chalk.yellow.bold("🍌 Banana Code — Peeling the project..."));
@@ -1289,7 +1306,6 @@ function drawPromptBox(inputText, cursorPos) {
 
     const isEmpty = inputText.length === 0;
     const rawContent = isEmpty ? placeholder : inputText;
-    const colorFn = isEmpty ? chalk.gray : chalk.white;
     const totalChars = prefix.length + rawContent.length;
     const cursorIndex = prefix.length + cursorPos;
     // Ensure we always have enough rows to host the cursor, even when input
@@ -1310,11 +1326,11 @@ function drawPromptBox(inputText, cursorPos) {
         let segment, lineText;
         if (i === 0) {
             segment = rawContent.substring(0, firstRowChars);
-            lineText = prefix + colorFn(segment);
+            lineText = prefix + stylePromptSegment(segment, isEmpty);
         } else {
             const offset = firstRowChars + (i - 1) * width;
             segment = rawContent.substring(offset, offset + width);
-            lineText = colorFn(segment);
+            lineText = stylePromptSegment(segment, isEmpty);
         }
         process.stdout.write(userBg(padLine(lineText, width)) + '\n');
     }
@@ -1385,7 +1401,6 @@ function drawPromptBoxInitial(inputText) {
 
     const isEmpty = inputText.length === 0;
     const rawContent = isEmpty ? placeholder : inputText;
-    const colorFn = isEmpty ? chalk.gray : chalk.white;
     const totalChars = prefix.length + rawContent.length;
     const cursorIndex = prefix.length + (inputText.length || 0);
     const rows = Math.max(Math.ceil(totalChars / width) || 1, Math.floor(cursorIndex / width) + 1);
@@ -1398,11 +1413,11 @@ function drawPromptBoxInitial(inputText) {
         let segment, lineText;
         if (i === 0) {
             segment = rawContent.substring(0, firstRowChars);
-            lineText = prefix + colorFn(segment);
+            lineText = prefix + stylePromptSegment(segment, isEmpty);
         } else {
             const offset = firstRowChars + (i - 1) * width;
             segment = rawContent.substring(offset, offset + width);
-            lineText = colorFn(segment);
+            lineText = stylePromptSegment(segment, isEmpty);
         }
         process.stdout.write(userBg(padLine(lineText, width)) + '\n');
     }
@@ -1471,10 +1486,42 @@ function promptUser() {
         let resolveCalled = false;
         let onData;    // Declare early so resolve closure can reference it
         let onResize;  // Same for resize listener
+        let ultrathinkAnimationTimer = null;
+
+        const stopUltrathinkAnimation = () => {
+            if (ultrathinkAnimationTimer) {
+                clearInterval(ultrathinkAnimationTimer);
+                ultrathinkAnimationTimer = null;
+            }
+        };
+
+        const syncUltrathinkAnimation = () => {
+            if (!isUltrathinkRainbowEnabled() || !/@ultrathink\b/i.test(inputBuffer)) {
+                stopUltrathinkAnimation();
+                return;
+            }
+
+            if (!ultrathinkAnimationTimer) {
+                ultrathinkAnimationTimer = setInterval(() => {
+                    if (resolveCalled) {
+                        stopUltrathinkAnimation();
+                        return;
+                    }
+                    ultrathinkAnimationFrame = (ultrathinkAnimationFrame + 1) % 8;
+                    drawPromptBox(inputBuffer, cursorPos);
+                }, 140);
+            }
+        };
+
+        const redrawPrompt = () => {
+            drawPromptBox(inputBuffer, cursorPos);
+            syncUltrathinkAnimation();
+        };
 
         const originalResolve = resolve;
         resolve = (val) => {
             resolveCalled = true;
+            stopUltrathinkAnimation();
             process.stdout.write('\x1b[?2004l'); // disable bracketed paste mode
             if (onResize) process.stdout.removeListener('resize', onResize);
             if (process.stdin.isTTY) {
@@ -1552,7 +1599,7 @@ function promptUser() {
                         exitRequested = false;
                         inputBuffer = inputBuffer.slice(0, cursorPos) + fullPaste + inputBuffer.slice(cursorPos);
                         cursorPos += fullPaste.length;
-                        drawPromptBox(inputBuffer, cursorPos);
+                        redrawPrompt();
                     }
                 } else {
                     pasteBuffer += str;
@@ -1578,7 +1625,7 @@ function promptUser() {
                 if (cursorPos > 0) {
                     inputBuffer = inputBuffer.slice(0, cursorPos - 1) + inputBuffer.slice(cursorPos);
                     cursorPos--;
-                    drawPromptBox(inputBuffer, cursorPos);
+                    redrawPrompt();
                 }
                 return;
             }
@@ -1587,18 +1634,18 @@ function promptUser() {
                 exitRequested = false;
                 if (cursorPos < inputBuffer.length) {
                     inputBuffer = inputBuffer.slice(0, cursorPos) + inputBuffer.slice(cursorPos + 1);
-                    drawPromptBox(inputBuffer, cursorPos);
+                    redrawPrompt();
                 }
                 return;
             }
 
             if (str === '\x1b[D') {                             // Arrow Left
-                if (cursorPos > 0) { cursorPos--; drawPromptBox(inputBuffer, cursorPos); }
+                if (cursorPos > 0) { cursorPos--; redrawPrompt(); }
                 return;
             }
 
             if (str === '\x1b[C') {                             // Arrow Right
-                if (cursorPos < inputBuffer.length) { cursorPos++; drawPromptBox(inputBuffer, cursorPos); }
+                if (cursorPos < inputBuffer.length) { cursorPos++; redrawPrompt(); }
                 return;
             }
 
@@ -1610,7 +1657,7 @@ function promptUser() {
                     historyIndex++;
                     inputBuffer = commandHistory[commandHistory.length - 1 - historyIndex];
                     cursorPos = inputBuffer.length;
-                    drawPromptBox(inputBuffer, cursorPos);
+                    redrawPrompt();
                 }
                 return;
             }
@@ -1624,18 +1671,18 @@ function promptUser() {
                         inputBuffer = commandHistory[commandHistory.length - 1 - historyIndex];
                     }
                     cursorPos = inputBuffer.length;
-                    drawPromptBox(inputBuffer, cursorPos);
+                    redrawPrompt();
                 }
                 return;
             }
 
             if (str === '\x1b[H' || str === '\x01') {           // Home / Ctrl+A
-                cursorPos = 0; drawPromptBox(inputBuffer, cursorPos);
+                cursorPos = 0; redrawPrompt();
                 return;
             }
 
             if (str === '\x1b[F' || str === '\x05') {           // End / Ctrl+E
-                cursorPos = inputBuffer.length; drawPromptBox(inputBuffer, cursorPos);
+                cursorPos = inputBuffer.length; redrawPrompt();
                 return;
             }
 
@@ -1645,7 +1692,7 @@ function promptUser() {
             exitRequested = false;
             inputBuffer = inputBuffer.slice(0, cursorPos) + str + inputBuffer.slice(cursorPos);
             cursorPos += str.length;
-            drawPromptBox(inputBuffer, cursorPos);
+            redrawPrompt();
         };
 
         process.stdin.on('data', onData);
@@ -1656,7 +1703,7 @@ function promptUser() {
             lastCursorRow = 0;
             lastPromptRows = 1;
             process.stdout.write('\x1b[2J\x1b[H');
-            drawPromptBox(inputBuffer, cursorPos);
+            redrawPrompt();
         };
         process.stdout.on('resize', onResize);
     });
@@ -1789,12 +1836,23 @@ async function main() {
             } else {
                 let finalInput = trimmed;
                 let attachedImages = [];
+                let ultrathinkEnabled = false;
+                const activeProviderConfig = getBananaSplitLocalConfig(config);
+                const ultrathinkDirective = extractUltrathinkDirective(finalInput);
+                if (ultrathinkDirective.enabled) {
+                    finalInput = ultrathinkDirective.text;
+                    if (providerSupportsUltrathink(activeProviderConfig)) {
+                        ultrathinkEnabled = true;
+                        console.log(`${chalk.gray('(Using ')}${rainbowUltrathink()}${chalk.gray(' maximum reasoning for this message)')}`);
+                    }
+                }
 
                 // Robustly extract file mentions, supporting quoted paths like @"path with spaces"
                 const fileMentions = [];
                 const mentionRegex = /@@?("[^"]+"|[^\s]+)/g;
                 let match;
-                while ((match = mentionRegex.exec(trimmed)) !== null) {
+                while ((match = mentionRegex.exec(finalInput)) !== null) {
+                    if (isUltrathinkMention(match[0])) continue;
                     fileMentions.push(match[0]);
                 }
 
@@ -1901,7 +1959,7 @@ async function main() {
                 const messageCountBeforeResponse = Array.isArray(providerInstance.messages) ? providerInstance.messages.length : 0;
                 resetRemoteAiResponseTracking();
                 try {
-                    responseText = await providerInstance.sendMessage({ text: modifiedInput, images: attachedImages });
+                    responseText = await providerInstance.sendMessage({ text: modifiedInput, images: attachedImages, ultrathink: ultrathinkEnabled });
                 } finally {
                     global.isAiSpeaking = false;
                 }

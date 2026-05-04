@@ -16,6 +16,7 @@ import { getSessionPermissions, setYoloMode } from './permissions.js';
 import { getContextBreakdown } from './utils/tokens.js';
 import { TOOLS } from './tools/registry.js';
 import { mcpManager } from './utils/mcp.js';
+import { extractUltrathinkDirective, isUltrathinkMention, providerSupportsUltrathink } from './utils/ultrathink.js';
 
 const PROVIDER_REINIT_KEYS = new Set([
     'provider',
@@ -135,6 +136,7 @@ function extractInlineAttachmentMentions(text = '') {
     const mentions = [];
     const mentionRegex = /@@?("[^"]+"|'[^']+'|[^\s]+)/g;
     for (const match of text.matchAll(mentionRegex)) {
+        if (isUltrathinkMention(match[0])) continue;
         mentions.push(match[1]);
     }
     return mentions;
@@ -718,10 +720,21 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                     // Set the global handler just before sending a message to ensure it's routed to THIS socket
                     global.apiPermissionHandler = sessionPermissionHandler;
                     const originalUserText = String(data.text || '');
+                    let effectiveUserText = originalUserText;
+                    let ultrathinkEnabled = false;
 
                     if (!providerInstance) {
                         console.log(chalk.gray(`[API] Creating provider instance...`));
                         providerInstance = createProviderForConfig(createProvider, config);
+                    }
+
+                    const activeProviderConfig = getBananaSplitLocalConfig(config);
+                    const ultrathinkDirective = extractUltrathinkDirective(effectiveUserText);
+                    if (ultrathinkDirective.enabled) {
+                        effectiveUserText = ultrathinkDirective.text;
+                        if (providerSupportsUltrathink(activeProviderConfig)) {
+                            ultrathinkEnabled = true;
+                        }
                     }
 
                     // Attach a temporary listener for this specific request
@@ -743,7 +756,7 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                     };
 
                     console.log(chalk.gray(`[API] Sending message to AI...`));
-                    const preparedInput = await prepareChatInput(originalUserText, data.attachments || [], currentWorkspace);
+                    const preparedInput = await prepareChatInput(effectiveUserText, data.attachments || [], currentWorkspace);
                     if (preparedInput.dropped.length > 0 && ws.readyState === ws.OPEN) {
                         ws.send(JSON.stringify({
                             type: 'attachments_dropped',
@@ -754,7 +767,8 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                             }))
                         }));
                     }
-                    const response = await providerInstance.sendMessage(preparedInput.images.length > 0 ? preparedInput : preparedInput.text);
+                    const providerInput = { text: preparedInput.text, images: preparedInput.images, ultrathink: ultrathinkEnabled };
+                    const response = await providerInstance.sendMessage(preparedInput.images.length > 0 || ultrathinkEnabled ? providerInput : preparedInput.text);
                     console.log(chalk.gray(`[API] AI response complete.`));
                     
                     // Save the session to disk

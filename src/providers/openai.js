@@ -11,6 +11,7 @@ import { printMarkdown } from '../utils/markdown.js';
 import { OPENAI_MODELS, CODEX_MODELS } from '../constants.js';
 import { AUTO_MODEL_DESCRIPTIONS, AUTO_ROUTER_MODELS, buildRoutingPrompt, parseRoutingResponse, openAIMessagesToAutoRouterHistory } from '../utils/autoModel.js';
 import { sendRemoteAiSegment } from '../remote.js';
+import { extractUltrathinkDirective } from '../utils/ultrathink.js';
 
 const CODEX_REASONING_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
 
@@ -222,6 +223,11 @@ export class OpenAIProvider {
             images = input.images || [];
         }
 
+        const ultrathinkDirective = extractUltrathinkDirective(message);
+        if (ultrathinkDirective.enabled) {
+            message = ultrathinkDirective.text;
+        }
+
         let activeModel = this.modelName;
         if (this.modelName === 'auto') {
             const routing = await this.autoRoute(message);
@@ -396,11 +402,19 @@ export class OpenAIProvider {
     async sendOauthMessage(input) {
         let message = '';
         let images = [];
+        let ultrathinkEnabled = false;
         if (typeof input === 'string') {
             message = input;
         } else {
             message = input.text;
             images = input.images || [];
+            ultrathinkEnabled = Boolean(input.ultrathink);
+        }
+
+        const ultrathinkDirective = extractUltrathinkDirective(message);
+        if (ultrathinkDirective.enabled) {
+            ultrathinkEnabled = true;
+            message = ultrathinkDirective.text;
         }
 
         let activeOauthModel = this.modelName;
@@ -413,6 +427,7 @@ export class OpenAIProvider {
         }
 
         this.messages.push({ role: 'user', content: message, attachedImages: images });
+        const activeReasoningEffort = ultrathinkEnabled ? 'xhigh' : getCodexReasoningEffort(this.config);
 
         const authFile = path.join(os.homedir(), '.codex', 'auth.json');
         let accessToken, accountId;
@@ -526,7 +541,7 @@ export class OpenAIProvider {
                     store: false,
                     stream: true,
                     include: ["reasoning.encrypted_content"],
-                    reasoning: { effort: getCodexReasoningEffort(this.config), summary: "auto" },
+                    reasoning: { effort: activeReasoningEffort, summary: "auto" },
                     text: { verbosity: "medium" }
                 };
 

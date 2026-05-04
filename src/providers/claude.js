@@ -11,6 +11,7 @@ import { printMarkdown } from '../utils/markdown.js';
 import { CLAUDE_MODELS, CLAUDE_PRICING } from '../constants.js';
 import { AUTO_MODEL_DESCRIPTIONS, AUTO_ROUTER_MODELS, buildRoutingPrompt, parseRoutingResponse, claudeMessagesToAutoRouterHistory } from '../utils/autoModel.js';
 import { sendRemoteAiSegment } from '../remote.js';
+import { extractUltrathinkDirective } from '../utils/ultrathink.js';
 
 export class ClaudeProvider {
     constructor(config) {
@@ -120,11 +121,19 @@ export class ClaudeProvider {
     async sendMessage(input) {
         let message = '';
         let images = [];
+        let ultrathinkEnabled = false;
         if (typeof input === 'string') {
             message = input;
         } else {
             message = input.text;
             images = input.images || [];
+            ultrathinkEnabled = Boolean(input.ultrathink);
+        }
+
+        const ultrathinkDirective = extractUltrathinkDirective(message);
+        if (ultrathinkDirective.enabled) {
+            ultrathinkEnabled = true;
+            message = ultrathinkDirective.text;
         }
 
         let activeModel = this.modelName;
@@ -134,9 +143,12 @@ export class ClaudeProvider {
             const routing = await this.autoRoute(message);
             activeModel = routing.model;
             activeEffort = routing.effort || 'high';
+            if (ultrathinkEnabled) activeEffort = 'max';
             if (!this.config.isApiMode) {
                 console.log(chalk.magenta(`\n[Auto Mode] → ${chalk.yellow(activeModel)} (Effort: ${chalk.yellow(activeEffort.toUpperCase())}): ${routing.reason}`));
             }
+        } else if (ultrathinkEnabled) {
+            activeEffort = 'max';
         }
 
         const userContent = [];
