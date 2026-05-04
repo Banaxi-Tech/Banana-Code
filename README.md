@@ -110,6 +110,8 @@ Add `./.banana/settings.local.json` in a project folder to override or add CLI s
 
 Because this file can change safety-related settings such as permission behavior, Banana Code asks you to confirm that you trust the folder every time it starts in a directory containing `./.banana/settings.local.json`.
 
+When Banana Code starts interactively in a folder that has `AGENTS.md`, `CLAUDE.md`, or `GEMINI.md`, it asks whether to merge those existing agent instructions into `BANANA.md`. Imported sections are marked with content hashes, so Banana Code skips the prompt once the current file contents are already merged and asks again only if those source instruction files change.
+
 ### Resume a Session
 To continue where you left off, use the `--resume` flag with your session UUID:
 ```bash

@@ -26,6 +26,7 @@ import { mcpManager } from './utils/mcp.js';
 import { startApiServer } from './server.js';
 import { loadPlugins, pluginRegistry, installPlugin, removePlugin, getConfiguredPlugins } from './utils/plugins.js';
 import { connectRemoteTooling, disconnectRemoteTooling, finalizeTurn, redeemRemotePairingCode, resetRemoteAiResponseTracking, sendRemoteAiMessage } from './remote.js';
+import { promptToMergeExternalAgentInstructions } from './utils/projectInstructions.js';
 
 let config;
 let providerInstance;
@@ -1087,6 +1088,17 @@ async function handleSlashCommand(command) {
                 console.log(chalk.red(`Failed to initialize project: ${err.message}`));
             }
             break;
+        case '/import-instructions': {
+            try {
+                const result = await promptToMergeExternalAgentInstructions();
+                if (result.status === 'no_pending') {
+                    console.log(chalk.gray('No new external agent instructions to import (BANANA.md is already up to date).'));
+                }
+            } catch (err) {
+                console.log(chalk.red(`Failed to import instructions: ${err.message}`));
+            }
+            break;
+        }
         case '/plugin': {
             const subCmd = args[0];
             if (subCmd === 'add' || subCmd === 'install') {
@@ -1140,6 +1152,7 @@ Available commands:
   /skills          - List loaded agent skills
   /memory          - Manage global AI memories
   /init            - Generate a BANANA.md project summary file
+  /import-instructions - Merge AGENTS.md/CLAUDE.md/GEMINI.md into BANANA.md
   /plan            - Enable Plan Mode (AI proposes a plan for big changes)
   /agent           - Enable Agent Mode (default, AI edits directly)
   /skill-creator   - Enable Skill Creator Mode (AI helps you create custom skills)
@@ -1662,6 +1675,18 @@ async function main() {
         // Default Banana Guard to true for existing users upgrading
         if (config.useBananaGuard === undefined) {
             config.useBananaGuard = true;
+        }
+
+        const isNonInteractiveEnv = Boolean(
+            process.env.CI ||
+            process.env.BANANA_NONINTERACTIVE ||
+            process.env.GITHUB_ACTIONS ||
+            process.env.BUILDKITE ||
+            process.env.JENKINS_URL
+        );
+
+        if (!process.argv.includes('--api') && process.stdin.isTTY && process.stdout.isTTY && !isNonInteractiveEnv) {
+            await promptToMergeExternalAgentInstructions();
         }
 
         // Global pointers for Banana Guard

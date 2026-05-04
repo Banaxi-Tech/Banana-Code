@@ -14,9 +14,28 @@ class MCPManager {
     constructor() {
         this.clients = new Map();
         this.tools = [];
+        this._opQueue = Promise.resolve();
+    }
+
+    _enqueue(operation) {
+        const next = this._opQueue.then(() => operation()).catch(err => {
+            console.log(chalk.red(`MCP operation failed: ${err.message}`));
+        });
+        this._opQueue = next;
+        return next;
     }
 
     async init() {
+        return this._enqueue(() => this._initInternal());
+    }
+
+    async cleanup() {
+        return this._enqueue(() => this._cleanupInternal());
+    }
+
+    async _initInternal() {
+        await this._cleanupInternal();
+
         try {
             const configData = await fs.readFile(MCP_CONFIG_FILE, 'utf-8');
             const config = JSON.parse(configData);
@@ -87,12 +106,14 @@ class MCPManager {
         return result.content.map(c => c.text).join('\n');
     }
 
-    async cleanup() {
+    async _cleanupInternal() {
         for (const [name, client] of this.clients) {
             try {
                 await client.close();
             } catch (e) {}
         }
+        this.clients.clear();
+        this.tools = [];
     }
 }
 

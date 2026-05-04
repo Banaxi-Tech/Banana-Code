@@ -193,7 +193,7 @@ export async function saveConfig(config) {
     }
 }
 
-function copyBananaSplitProviderConfig(provider, providerConfig) {
+export function copyBananaSplitProviderConfig(provider, providerConfig) {
     const result = {
         provider,
         model: providerConfig.model

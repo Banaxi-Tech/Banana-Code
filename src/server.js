@@ -10,8 +10,215 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
-import { loadConfig } from './config.js';
+import { loadConfig, saveConfig, copyBananaSplitProviderConfig, getBananaSplitLocalConfig } from './config.js';
 import { listSessions, loadSession, saveSession, generateSessionId } from './sessions.js';
+import { getSessionPermissions, setYoloMode } from './permissions.js';
+import { getContextBreakdown } from './utils/tokens.js';
+import { TOOLS } from './tools/registry.js';
+import { mcpManager } from './utils/mcp.js';
+
+const PROVIDER_REINIT_KEYS = new Set([
+    'provider',
+    'model',
+    'betaTools',
+    'usePatchFile',
+    'useMemory',
+    'bananaSplit',
+    'planMode',
+    'askMode',
+    'securityMode',
+    'deepReviewMode',
+    'skillCreatorMode',
+    'useExtendedCache',
+    'claudeEffort',
+    'openaiCodexEffort'
+]);
+
+const LOCAL_BANANA_SPLIT_PROVIDERS = new Set(['ollama', 'lmstudio']);
+const REVIEWER_BANANA_SPLIT_PROVIDERS = new Set(['gemini', 'claude', 'openai', 'mistral', 'openrouter', 'ollama_cloud']);
+const IMAGE_EXTENSIONS = new Map([
+    ['.png', 'image/png'],
+    ['.jpg', 'image/jpeg'],
+    ['.jpeg', 'image/jpeg'],
+    ['.webp', 'image/webp'],
+    ['.gif', 'image/gif']
+]);
+
+function shouldReinitializeProvider(configUpdate = {}) {
+    return Object.keys(configUpdate).some(key => PROVIDER_REINIT_KEYS.has(key));
+}
+
+function getActiveProviderId(config = {}) {
+    return config?.bananaSplit?.enabled && config.bananaSplit.local?.provider
+        ? config.bananaSplit.local.provider
+        : config.provider;
+}
+
+function isPortableChatHistory(messages) {
+    if (!Array.isArray(messages) || messages.length === 0) return false;
+    return messages.every(msg => {
+        return msg && typeof msg === 'object' && !Object.prototype.hasOwnProperty.call(msg, 'parts');
+    });
+}
+
+function shouldPreserveHistoryAcrossReinit(savedMessages, previousConfig, nextConfig) {
+    if (savedMessages === undefined) return false;
+    if (Array.isArray(savedMessages) && savedMessages.length === 0) return false;
+
+    const previousProvider = getActiveProviderId(previousConfig);
+    const nextProvider = getActiveProviderId(nextConfig);
+    if (previousProvider && previousProvider === nextProvider) return true;
+
+    return nextProvider !== 'gemini' && isPortableChatHistory(savedMessages);
+}
+
+function reinitializeProviderPreservingHistory(providerInstance, createProvider, previousConfig, nextConfig = previousConfig) {
+    const savedMessages = providerInstance?.messages;
+    const nextProvider = createProviderForConfig(createProvider, nextConfig);
+    if (
+        nextProvider?.messages !== undefined &&
+        shouldPreserveHistoryAcrossReinit(savedMessages, previousConfig, nextConfig)
+    ) {
+        nextProvider.messages = savedMessages;
+    }
+    return nextProvider;
+}
+
+function createProviderForConfig(createProvider, config) {
+    return createProvider(getBananaSplitLocalConfig(config));
+}
+
+async function refreshSystemPrompt(providerInstance, config) {
+    if (providerInstance && typeof providerInstance.updateSystemPrompt === 'function') {
+        const { getSystemPrompt } = await import('./prompt.js');
+        providerInstance.updateSystemPrompt(getSystemPrompt(config));
+    }
+}
+
+async function collectProviderMessages(providerInstance) {
+    if (!providerInstance) return [];
+    if (providerInstance.messages) return providerInstance.messages;
+    if (typeof providerInstance.chat?.getHistory === 'function') return await providerInstance.chat.getHistory();
+    return [];
+}
+
+async function buildContextInfo(providerInstance) {
+    const messages = await collectProviderMessages(providerInstance);
+    const breakdown = getContextBreakdown(messages);
+    const payload = { breakdown };
+
+    if (providerInstance && typeof providerInstance.calculateSessionCost === 'function') {
+        payload.cost = providerInstance.calculateSessionCost();
+    }
+
+    return payload;
+}
+
+function resolveAttachmentPath(rawPath, workspace) {
+    if (typeof rawPath !== 'string' || rawPath.trim() === '') {
+        throw new Error('Attachment path must be a non-empty string.');
+    }
+
+    let cleaned = rawPath.trim();
+    if ((cleaned.startsWith('"') && cleaned.endsWith('"')) || (cleaned.startsWith("'") && cleaned.endsWith("'"))) {
+        cleaned = cleaned.slice(1, -1);
+    }
+
+    if (cleaned.startsWith('~')) {
+        cleaned = path.join(os.homedir(), cleaned.slice(1));
+    }
+
+    return path.resolve(path.isAbsolute(cleaned) ? cleaned : path.join(workspace, cleaned));
+}
+
+function extractInlineAttachmentMentions(text = '') {
+    const mentions = [];
+    const mentionRegex = /@@?("[^"]+"|'[^']+'|[^\s]+)/g;
+    for (const match of text.matchAll(mentionRegex)) {
+        mentions.push(match[1]);
+    }
+    return mentions;
+}
+
+async function prepareChatInput(text = '', attachments = [], workspace = process.cwd()) {
+    const seenPaths = new Set();
+    let promptText = String(text || '');
+    const images = [];
+    const dropped = [];
+    const requestedPaths = [
+        ...extractInlineAttachmentMentions(promptText),
+        ...attachments.map(attachment => typeof attachment === 'string' ? attachment : attachment?.path).filter(Boolean)
+    ];
+
+    for (const rawPath of requestedPaths) {
+        let resolvedPath;
+        try {
+            resolvedPath = resolveAttachmentPath(rawPath, workspace);
+            if (seenPaths.has(resolvedPath)) continue;
+            seenPaths.add(resolvedPath);
+
+            const stat = await fs.stat(resolvedPath);
+            if (!stat.isFile()) {
+                dropped.push({ rawPath, resolvedPath, reason: 'Not a regular file' });
+                continue;
+            }
+
+            const ext = path.extname(resolvedPath).toLowerCase();
+            const mimeType = IMAGE_EXTENSIONS.get(ext);
+            if (mimeType) {
+                const buffer = await fs.readFile(resolvedPath);
+                images.push({ base64: buffer.toString('base64'), mimeType, path: resolvedPath });
+            } else {
+                const content = await fs.readFile(resolvedPath, 'utf8');
+                promptText += `\n\n--- File Context: ${resolvedPath} ---\n${content}\n--- End of ${resolvedPath} ---`;
+            }
+        } catch (error) {
+            const resolvedSuffix = resolvedPath ? ` (${resolvedPath})` : '';
+            console.log(chalk.yellow(`[API] Warning: Could not read attachment ${rawPath}${resolvedSuffix}: ${error.message}`));
+            dropped.push({ rawPath, resolvedPath, reason: error.message });
+        }
+    }
+
+    return { text: promptText, images, dropped };
+}
+
+function normalizeBananaSplitConfig(input = {}, currentConfig = {}) {
+    const enabled = input.enabled !== false;
+    if (!enabled) {
+        return {
+            ...(currentConfig.bananaSplit || {}),
+            enabled: false
+        };
+    }
+
+    const existing = currentConfig.bananaSplit || {};
+    const localInput = input.local ?? existing.local;
+    const reviewerInput = input.reviewer ?? existing.reviewer;
+    const localProvider = localInput?.provider;
+    const reviewerProvider = reviewerInput?.provider;
+    if (!LOCAL_BANANA_SPLIT_PROVIDERS.has(localProvider)) {
+        throw new Error('BananaSplit local provider must be ollama or lmstudio.');
+    }
+    if (!REVIEWER_BANANA_SPLIT_PROVIDERS.has(reviewerProvider)) {
+        throw new Error('BananaSplit reviewer provider must be one of gemini, claude, openai, mistral, openrouter, ollama_cloud.');
+    }
+
+    return {
+        enabled: true,
+        local: copyBananaSplitProviderConfig(localProvider, localInput),
+        reviewer: copyBananaSplitProviderConfig(reviewerProvider, reviewerInput)
+    };
+}
+
+async function syncBetaFeatureSideEffects(previousBetaTools = [], nextBetaTools = []) {
+    const hadMcp = previousBetaTools.includes('mcp_support');
+    const hasMcp = nextBetaTools.includes('mcp_support');
+    if (hasMcp && !hadMcp) {
+        await mcpManager.init();
+    } else if (!hasMcp && hadMcp) {
+        await mcpManager.cleanup();
+    }
+}
 
 export async function startApiServer(port = 3000, createProvider, host = '127.0.0.1', noAuth = false, initialConfig = null) {
     if (noAuth) {
@@ -64,6 +271,42 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
 
     let config = initialConfig || await loadConfig({ includeProjectLocal: true });
     let providerInstance = null;
+    let ultraMemoryInterval = null;
+    global.bananaConfig = config;
+
+    const updateUltraMemoryBackground = async (wasEnabled, isEnabled) => {
+        if (wasEnabled && !isEnabled && ultraMemoryInterval) {
+            clearInterval(ultraMemoryInterval);
+            ultraMemoryInterval = null;
+        }
+
+        if (isEnabled && !ultraMemoryInterval) {
+            const { runUltraMemoryBackground } = await import('./utils/ultraMemory.js');
+            ultraMemoryInterval = setInterval(() => runUltraMemoryBackground(config, createProvider), 60000);
+            await runUltraMemoryBackground(config, createProvider);
+        }
+    };
+
+    if (config.useUltraMemory) {
+        await updateUltraMemoryBackground(false, true);
+    }
+
+    const stopUltraMemoryBackground = () => {
+        if (ultraMemoryInterval) {
+            clearInterval(ultraMemoryInterval);
+            ultraMemoryInterval = null;
+        }
+    };
+
+    const handleProcessExit = () => {
+        stopUltraMemoryBackground();
+    };
+    process.once('SIGINT', handleProcessExit);
+    process.once('SIGTERM', handleProcessExit);
+    process.once('beforeExit', handleProcessExit);
+
+    wss.on('close', stopUltraMemoryBackground);
+    server.on('close', stopUltraMemoryBackground);
 
     // WebSocket connection handling
     wss.on('connection', (ws, req) => {
@@ -155,7 +398,7 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                         
                         // Force provider re-init if it exists to pick up new workspace context
                         if (providerInstance) {
-                            providerInstance = createProvider(config);
+                            providerInstance = createProviderForConfig(createProvider, config);
                         }
                     } catch (err) {
                         ws.send(JSON.stringify({ type: 'error', message: `Invalid workspace path: ${err.message}` }));
@@ -164,29 +407,31 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                 }
 
                 if (data.type === 'update_config') {
-                    const oldProvider = config.provider;
-                    const oldModel = config.model;
+                    const previousConfig = config;
+                    const previousBetaTools = config.betaTools || [];
+                    const previousUltraMemory = config.useUltraMemory;
 
                     config = { ...config, ...data.config };
-                    
-                    // If provider or model changed, force re-initialization of the provider instance
-                    if (providerInstance && (data.config.provider || data.config.model)) {
-                        const savedMessages = providerInstance.messages;
-                        providerInstance = createProvider(config);
-                        providerInstance.messages = savedMessages;
+                    global.bananaConfig = config;
+
+                    if (data.config.betaTools !== undefined) {
+                        await syncBetaFeatureSideEffects(previousBetaTools, config.betaTools || []);
+                    }
+
+                    if (data.config.useUltraMemory !== undefined && data.config.useUltraMemory && !previousUltraMemory && !config.ultraMemoryEnabledAt) {
+                        config.ultraMemoryEnabledAt = new Date().toISOString();
+                    }
+
+                    if (providerInstance && shouldReinitializeProvider(data.config)) {
+                        providerInstance = reinitializeProviderPreservingHistory(providerInstance, createProvider, previousConfig, config);
                     } else if (providerInstance) {
                         providerInstance.config = { ...providerInstance.config, ...data.config };
                     }
 
                     // Always refresh the system prompt to reflect potential style/emoji/mode changes
-                    if (providerInstance && typeof providerInstance.updateSystemPrompt === 'function') {
-                        const { getSystemPrompt } = await import('./prompt.js');
-                        const newSysPrompt = getSystemPrompt(config);
-                        providerInstance.updateSystemPrompt(newSysPrompt);
-                    }
+                    await refreshSystemPrompt(providerInstance, config);
 
                     if (data.save) {
-                        const { saveConfig } = await import('./config.js');
                         await saveConfig(config);
                         console.log(chalk.cyan(`[API] Configuration updated and saved to disk.`));
                     } else {
@@ -195,14 +440,85 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
 
                     // Sync global YOLO state if changed
                     if (data.config.yolo !== undefined) {
-                        const { setYoloMode } = await import('./permissions.js');
                         setYoloMode(data.config.yolo);
                         console.log(chalk.bgRed.white.bold(data.config.yolo ? '\n [API] YOLO MODE ENABLED - Auto-accepting all permissions! \n' : '\n [API] YOLO mode disabled.\n'));
                     }
 
-                    // Keep global config in sync so permissions module reads live state
-                    global.bananaConfig = config;
+                    if (data.config.useUltraMemory !== undefined) {
+                        await updateUltraMemoryBackground(previousUltraMemory, config.useUltraMemory);
+                    }
 
+                    ws.send(JSON.stringify({ type: 'config_updated', config }));
+                    return;
+                }
+
+                if (data.type === 'get_context') {
+                    ws.send(JSON.stringify({ type: 'context_info', ...(await buildContextInfo(providerInstance)) }));
+                    return;
+                }
+
+                if (data.type === 'list_permissions') {
+                    ws.send(JSON.stringify({ type: 'permissions_list', permissions: getSessionPermissions() }));
+                    return;
+                }
+
+                if (data.type === 'list_beta_features') {
+                    const enabled = config.betaTools || [];
+                    const features = [
+                        ...TOOLS.filter(t => t.beta).map(t => ({
+                            name: t.name,
+                            label: t.label || t.name,
+                            description: t.description || '',
+                            enabled: enabled.includes(t.name),
+                            beta: true
+                        })),
+                        {
+                            name: 'clean_command',
+                            label: '/clean command',
+                            description: 'Context compression command.',
+                            enabled: enabled.includes('clean_command'),
+                            beta: true
+                        },
+                        {
+                            name: 'mcp_support',
+                            label: 'MCP Support',
+                            description: 'Connect external Model Context Protocol servers.',
+                            enabled: enabled.includes('mcp_support'),
+                            beta: true
+                        }
+                    ];
+                    ws.send(JSON.stringify({ type: 'beta_features', features, enabled }));
+                    return;
+                }
+
+                if (data.type === 'set_beta_features') {
+                    const previousConfig = config;
+                    const previousBetaTools = config.betaTools || [];
+                    const nextBetaTools = Array.isArray(data.features) ? [...new Set(data.features)] : [];
+                    await syncBetaFeatureSideEffects(previousBetaTools, nextBetaTools);
+                    config = { ...config, betaTools: nextBetaTools };
+                    global.bananaConfig = config;
+                    if (providerInstance) {
+                        providerInstance = reinitializeProviderPreservingHistory(providerInstance, createProvider, previousConfig, config);
+                        await refreshSystemPrompt(providerInstance, config);
+                    }
+                    await saveConfig(config);
+                    ws.send(JSON.stringify({ type: 'config_updated', config }));
+                    return;
+                }
+
+                if (data.type === 'set_banana_split') {
+                    const previousConfig = config;
+                    config = {
+                        ...config,
+                        bananaSplit: normalizeBananaSplitConfig(data.config || data.bananaSplit || {}, config)
+                    };
+                    global.bananaConfig = config;
+                    if (providerInstance) {
+                        providerInstance = reinitializeProviderPreservingHistory(providerInstance, createProvider, previousConfig, config);
+                        await refreshSystemPrompt(providerInstance, config);
+                    }
+                    await saveConfig(config);
                     ws.send(JSON.stringify({ type: 'config_updated', config }));
                     return;
                 }
@@ -232,7 +548,7 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                     config.provider = session.provider || config.provider;
                     config.model = session.model || config.model;
                     
-                    providerInstance = createProvider(config);
+                    providerInstance = createProviderForConfig(createProvider, config);
                     providerInstance.messages = session.messages || [];
                     currentSessionId = data.sessionId;
                     
@@ -288,7 +604,7 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                         const { getWorkspaceTree } = await import('./utils/workspace.js');
                         const tree = await getWorkspaceTree();
 
-                        const initProvider = createProvider(config);
+                        const initProvider = createProviderForConfig(createProvider, config);
                         initProvider.messages = [];
 
                         let initPrompt = "SYSTEM: You are a project summarizer. Review the following project file tree and briefly describe what this project is, what technologies it uses, and any obvious conventions. Keep it under 2 paragraphs. Output ONLY the summary text.";
@@ -304,7 +620,7 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                         console.log(chalk.green(`[API] Successfully created BANANA.md!`));
 
                         // Re-init current provider so it picks up the new BANANA.md
-                        providerInstance = createProvider(config);
+                        providerInstance = createProviderForConfig(createProvider, config);
                         
                         ws.send(JSON.stringify({ type: 'init_complete', summary }));
                     } catch (err) {
@@ -401,10 +717,11 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                 if (data.type === 'chat') {
                     // Set the global handler just before sending a message to ensure it's routed to THIS socket
                     global.apiPermissionHandler = sessionPermissionHandler;
+                    const originalUserText = String(data.text || '');
 
                     if (!providerInstance) {
                         console.log(chalk.gray(`[API] Creating provider instance...`));
-                        providerInstance = createProvider(config);
+                        providerInstance = createProviderForConfig(createProvider, config);
                     }
 
                     // Attach a temporary listener for this specific request
@@ -426,17 +743,29 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                     };
 
                     console.log(chalk.gray(`[API] Sending message to AI...`));
-                    const response = await providerInstance.sendMessage(data.text);
+                    const preparedInput = await prepareChatInput(originalUserText, data.attachments || [], currentWorkspace);
+                    if (preparedInput.dropped.length > 0 && ws.readyState === ws.OPEN) {
+                        ws.send(JSON.stringify({
+                            type: 'attachments_dropped',
+                            attachments: preparedInput.dropped.map(({ rawPath, resolvedPath, reason }) => ({
+                                path: rawPath,
+                                resolvedPath: resolvedPath || null,
+                                reason
+                            }))
+                        }));
+                    }
+                    const response = await providerInstance.sendMessage(preparedInput.images.length > 0 ? preparedInput : preparedInput.text);
                     console.log(chalk.gray(`[API] AI response complete.`));
                     
                     // Save the session to disk
                     if (!currentSessionId) currentSessionId = generateSessionId();
+                    const titleSource = originalUserText.trim() || (preparedInput.images.length > 0 ? 'Image attachment' : 'File attachment');
                     
                     await saveSession(currentSessionId, {
                         messages: providerInstance.messages,
                         provider: config.provider,
                         model: config.model,
-                        title: data.text.substring(0, 50) + (data.text.length > 50 ? '...' : '')
+                        title: titleSource.substring(0, 50) + (titleSource.length > 50 ? '...' : '')
                     });
 
                     let financial = null;
