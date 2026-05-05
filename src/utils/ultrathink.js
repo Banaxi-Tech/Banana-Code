@@ -3,6 +3,7 @@ import chalk from 'chalk';
 const ULTRATHINK_DIRECTIVE_REGEX = /(^|[\s([{])@ultrathink\b/gi;
 const ULTRATHINK_DISPLAY_REGEX = /@ultrathink\b/gi;
 const ULTRATHINK_COLORS = [217, 223, 230, 194, 158, 153, 147, 183];
+const VOICE_COMMAND_DISPLAY_REGEX = /(^|[\s([{])\/voice\b/gi;
 
 function normalizeDirectiveWhitespace(text) {
     return text
@@ -33,10 +34,18 @@ export function isUltrathinkMention(mention = '') {
     return /^@ultrathink\b/i.test(String(mention || ''));
 }
 
-export function rainbowUltrathink(text = 'ultrathink', offset = 0) {
+function rainbowText(text = '', offset = 0) {
     return Array.from(text)
         .map((char, index) => chalk.ansi256(ULTRATHINK_COLORS[(index + offset) % ULTRATHINK_COLORS.length])(char))
         .join('');
+}
+
+export function rainbowUltrathink(text = 'ultrathink', offset = 0) {
+    return rainbowText(text, offset);
+}
+
+export function rainbowVoice(text = 'voice', offset = 0) {
+    return rainbowText(text, offset);
 }
 
 export function styleUltrathinkMentions(text = '', baseStyle = value => value, offset = 0) {
@@ -47,6 +56,24 @@ export function styleUltrathinkMentions(text = '', baseStyle = value => value, o
     for (const match of raw.matchAll(ULTRATHINK_DISPLAY_REGEX)) {
         styled += baseStyle(raw.slice(lastIndex, match.index));
         styled += baseStyle('@') + rainbowUltrathink(match[0].slice(1), offset);
+        lastIndex = match.index + match[0].length;
+    }
+
+    styled += baseStyle(raw.slice(lastIndex));
+    return styled;
+}
+
+export function styleVoiceCommands(text = '', baseStyle = value => value, offset = 0) {
+    const raw = String(text || '');
+    let styled = '';
+    let lastIndex = 0;
+
+    for (const match of raw.matchAll(VOICE_COMMAND_DISPLAY_REGEX)) {
+        const prefix = match[1] || '';
+        const commandText = match[0].slice(prefix.length);
+
+        styled += baseStyle(raw.slice(lastIndex, match.index));
+        styled += baseStyle(prefix + commandText[0]) + rainbowVoice(commandText.slice(1), offset);
         lastIndex = match.index + match[0].length;
     }
 

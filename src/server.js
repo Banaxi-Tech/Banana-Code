@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Banaxi
 
 import express from 'express';
+import multer from 'multer';
 import { WebSocketServer } from 'ws';
 import cors from 'cors';
 import http from 'http';
@@ -17,6 +18,7 @@ import { getContextBreakdown } from './utils/tokens.js';
 import { TOOLS } from './tools/registry.js';
 import { mcpManager } from './utils/mcp.js';
 import { extractUltrathinkDirective, isUltrathinkMention, providerSupportsUltrathink } from './utils/ultrathink.js';
+import { GROQ_WHISPER_MODELS, getVoiceConfig, mimeTypeFromFileName, transcribeWithGroq } from './voice.js';
 
 const PROVIDER_REINIT_KEYS = new Set([
     'provider',
@@ -44,6 +46,7 @@ const IMAGE_EXTENSIONS = new Map([
     ['.webp', 'image/webp'],
     ['.gif', 'image/gif']
 ]);
+const AUDIO_UPLOAD_LIMIT_BYTES = 100 * 1024 * 1024;
 
 function shouldReinitializeProvider(configUpdate = {}) {
     return Object.keys(configUpdate).some(key => PROVIDER_REINIT_KEYS.has(key));
@@ -257,6 +260,10 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
     const app = express();
     const server = http.createServer(app);
     const wss = new WebSocketServer({ server });
+    const upload = multer({
+        storage: multer.memoryStorage(),
+        limits: { fileSize: AUDIO_UPLOAD_LIMIT_BYTES }
+    });
 
     app.use(cors());
     app.use(express.json());
@@ -273,8 +280,54 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
 
     let config = initialConfig || await loadConfig({ includeProjectLocal: true });
     let providerInstance = null;
+    let httpVoiceSessionId = null;
     let ultraMemoryInterval = null;
     global.bananaConfig = config;
+
+    const parseVoiceUpload = (req, res, next) => {
+        if (req.is('multipart/form-data')) {
+            upload.single('file')(req, res, next);
+            return;
+        }
+
+        express.raw({
+            type: ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav', 'application/octet-stream'],
+            limit: AUDIO_UPLOAD_LIMIT_BYTES
+        })(req, res, next);
+    };
+
+    async function sendApiChatMessage(text, workspace = process.cwd()) {
+        if (!providerInstance) {
+            providerInstance = createProviderForConfig(createProvider, config);
+        }
+
+        providerInstance.config.isApiMode = true;
+        providerInstance.onChunk = null;
+        providerInstance.onToolStart = null;
+        providerInstance.onToolEnd = null;
+
+        const preparedInput = await prepareChatInput(text, [], workspace);
+        const providerInput = preparedInput.images.length > 0
+            ? { text: preparedInput.text, images: preparedInput.images }
+            : preparedInput.text;
+        const response = await providerInstance.sendMessage(providerInput);
+
+        if (!httpVoiceSessionId) httpVoiceSessionId = generateSessionId();
+        const titleSource = String(text || '').trim() || 'Voice message';
+        await saveSession(httpVoiceSessionId, {
+            messages: providerInstance.messages,
+            provider: config.provider,
+            model: config.model,
+            title: titleSource.substring(0, 50) + (titleSource.length > 50 ? '...' : '')
+        });
+
+        let usage = null;
+        if (typeof providerInstance.calculateSessionCost === 'function') {
+            usage = providerInstance.calculateSessionCost();
+        }
+
+        return { response, usage, sessionId: httpVoiceSessionId };
+    }
 
     const updateUltraMemoryBackground = async (wasEnabled, isEnabled) => {
         if (wasEnabled && !isEnabled && ultraMemoryInterval) {
@@ -827,6 +880,74 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
 
     app.get('/api/status', (req, res) => {
         res.json({ status: 'running', provider: config.provider, model: config.model });
+    });
+
+    app.post('/api/voice', parseVoiceUpload, async (req, res) => {
+        try {
+            const configuredVoice = getVoiceConfig(config);
+            const groqApiKey = req.headers['x-groq-api-key']
+                || req.body?.groqApiKey
+                || req.query.groqApiKey
+                || configuredVoice.groqApiKey;
+            const model = req.body?.model
+                || req.query.model
+                || configuredVoice.model
+                || 'whisper-large-v3-turbo';
+
+            if (!groqApiKey) {
+                res.status(400).json({ error: 'Missing Groq API key. Send x-groq-api-key, groqApiKey, or configure voice.groqApiKey.' });
+                return;
+            }
+
+            if (!GROQ_WHISPER_MODELS.some(choice => choice.value === model)) {
+                res.status(400).json({ error: 'Unsupported Groq Whisper model. Use whisper-large-v3-turbo or whisper-large-v3.' });
+                return;
+            }
+
+            const fileBuffer = req.file?.buffer || (Buffer.isBuffer(req.body) ? req.body : null);
+            if (!fileBuffer || fileBuffer.length === 0) {
+                res.status(400).json({ error: 'Missing audio file. Upload multipart field "file" or send a raw .mp3/.wav body.' });
+                return;
+            }
+
+            const rawMimeType = String(req.headers['content-type'] || '').split(';')[0];
+            const defaultFileName = rawMimeType === 'audio/mpeg' || rawMimeType === 'audio/mp3' ? 'voice.mp3' : 'voice.wav';
+            const fileName = req.file?.originalname || req.query.filename || defaultFileName;
+            const mimeType = req.file?.mimetype || req.headers['content-type'] || mimeTypeFromFileName(fileName);
+            const supportedMime = ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav', 'application/octet-stream'].includes(String(mimeType).split(';')[0]);
+            const supportedName = ['.mp3', '.wav'].includes(path.extname(String(fileName)).toLowerCase());
+            if (!supportedMime && !supportedName) {
+                res.status(400).json({ error: 'Only .mp3 and .wav audio uploads are supported.' });
+                return;
+            }
+
+            const transcript = await transcribeWithGroq({
+                apiKey: groqApiKey,
+                model,
+                fileBuffer,
+                fileName,
+                mimeType
+            });
+
+            const prefix = typeof req.body?.text === 'string'
+                ? req.body.text
+                : (typeof req.query.text === 'string' ? req.query.text : '');
+            const messageText = prefix.trim()
+                ? `${prefix.trim()}\n\nVoice transcript:\n${transcript}`
+                : transcript;
+            const chatResult = await sendApiChatMessage(messageText);
+
+            res.json({
+                type: 'voice_done',
+                transcript,
+                finalResponse: chatResult.response,
+                usage: chatResult.usage,
+                sessionId: chatResult.sessionId
+            });
+        } catch (err) {
+            console.error(chalk.red(`[API] Voice error: ${err.message}`));
+            res.status(500).json({ error: err.message });
+        }
     });
 
     server.listen(port, host, () => {

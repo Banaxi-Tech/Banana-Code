@@ -129,6 +129,7 @@ While in a chat, use these special commands (type `/help` for the full list):
 | `/chats` | Browse and resume saved sessions (auto-titled). |
 | `/clear` | Clear the current conversation (same provider/model). |
 | `/clean` | Summarize long history into a short memory to save tokens (beta; enable in `/beta`). |
+| `/voice` | Record speech, transcribe with Groq Whisper V3/Turbo, then send the transcript to the AI. |
 | `/context` | Show message count and estimated tokens. |
 | `/settings` | Workspace auto-feed, markdown/syntax output, patch tool, token count, global memory, optional Puppeteer URL fetch. |
 | `/beta` | Beta tools (e.g. MCP, optional scrapers, `/clean`). |
@@ -150,6 +151,8 @@ While in a chat, use these special commands (type `/help` for the full list):
 | `/exit` | Quit (also `Ctrl+D` / `Ctrl+C` flow). |
 
 **File context:** Type `@path/to/file` or `@@/absolute/path` in your message to attach file contents to that prompt. Use `@@path/to/image.png` to attach an image (supported by Gemini/Claude/OpenAI).
+
+**Voice input:** Type `/voice` to configure your Groq API key and choose `whisper-large-v3-turbo` or `whisper-large-v3` the first time. Later `/voice` starts a microphone recording, and `/voice path/to/audio.wav` or `/voice path/to/audio.mp3` transcribes an existing file.
 
 ### ⚡ Auto Mode
 When **Auto Mode** is selected as the model (`/model` or initial setup), each new user message is first sent to a **small, fast router model** (per provider) together with the **last seven conversation messages** (formatted as context only). The router returns JSON: which concrete model should handle **this** turn and a short reason—so short follow-ups like “Implement it” can pick a capable model when the history shows a large task. The assistant’s reply then uses that model. If routing fails, providers fall back to a sensible default (e.g. Gemini may fall back to **Gemini 3 Flash**). **OpenRouter** and **local Ollama** do not offer Auto Mode (fixed model ID vs. local tag list).
@@ -372,6 +375,7 @@ The API server is protected by a **Secure API Token**.
 | `GET` | `/api/sessions` | JSON array of all saved chat sessions (metadata only, no message history). |
 | `GET` | `/api/config` | Current runtime configuration. |
 | `GET` | `/api/docs` | Internal `BANANA.md` documentation for the current workspace. |
+| `POST` | `/api/voice` | Upload `.mp3` or `.wav`, transcribe with Groq Whisper, then send the transcript to the AI. |
 
 ---
 
@@ -417,6 +421,22 @@ Streamed responses arrive as a sequence of events:
 | `{"type": "done", "finalResponse": "...", "usage": {...}}` | Full response complete. `usage` contains cost data if available. |
 
 Sessions are **automatically saved to disk** after every chat message.
+
+---
+
+##### 🎙️ Voice Upload
+
+Upload an audio file and have Banana Code transcribe it through Groq Whisper before sending the transcript to the active AI provider:
+
+```bash
+curl -X POST "http://localhost:3000/api/voice" \
+  -H "Authorization: Bearer YOUR_BANANA_API_TOKEN" \
+  -H "x-groq-api-key: YOUR_GROQ_API_KEY" \
+  -F "model=whisper-large-v3-turbo" \
+  -F "file=@question.wav"
+```
+
+You can also configure `voice.groqApiKey` and `voice.model` through `update_config`, then omit the Groq header and model field. The response includes `{ "transcript": "...", "finalResponse": "...", "usage": {...} }`.
 
 ---
 

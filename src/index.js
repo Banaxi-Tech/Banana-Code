@@ -27,7 +27,8 @@ import { startApiServer } from './server.js';
 import { loadPlugins, pluginRegistry, installPlugin, removePlugin, getConfiguredPlugins } from './utils/plugins.js';
 import { connectRemoteTooling, disconnectRemoteTooling, finalizeTurn, redeemRemotePairingCode, resetRemoteAiResponseTracking, sendRemoteAiMessage } from './remote.js';
 import { promptToMergeExternalAgentInstructions } from './utils/projectInstructions.js';
-import { extractUltrathinkDirective, isUltrathinkMention, providerSupportsUltrathink, rainbowUltrathink, styleUltrathinkMentions } from './utils/ultrathink.js';
+import { extractUltrathinkDirective, isUltrathinkMention, providerSupportsUltrathink, rainbowUltrathink, styleUltrathinkMentions, styleVoiceCommands } from './utils/ultrathink.js';
+import { cleanupVoiceClip, getVoiceConfig, hasUsableVoiceConfig, isSupportedVoiceFile, recordVoiceClip, setupVoiceConfig, transcribeWithGroq } from './voice.js';
 
 let config;
 let providerInstance;
@@ -119,6 +120,139 @@ function isEmptyAssistantResponse(responseText) {
 
 const EMPTY_TOOL_RESPONSE_CONTINUATION = `SYSTEM: Your previous turn used tools but ended without a final message.
 Continue from the latest tool results and complete the user's request now. If the work is done, give a concise final answer. If another tool call is required, call it. Do not repeat completed tool calls unless the latest tool result shows that is necessary.`;
+
+async function sendPromptToAi(finalInput, { attachedImages = [], ultrathinkEnabled = false, titleSource = finalInput } = {}) {
+    if (config.autoFeedWorkspace) {
+        const { getWorkspaceTree } = await import('./utils/workspace.js');
+        const tree = await getWorkspaceTree();
+        const { getSystemPrompt } = await import('./prompt.js');
+        let newSysPrompt = getSystemPrompt(config);
+        newSysPrompt += `\n\n--- Workspace File Tree ---\n${tree}\n--- End of Tree ---`;
+        if (typeof providerInstance.updateSystemPrompt === 'function') {
+            providerInstance.updateSystemPrompt(newSysPrompt);
+        }
+    }
+
+    let modifiedInput = finalInput;
+    for (const hook of pluginRegistry.lifecycleHooks.onBeforeMessage) {
+        try {
+            const res = await hook({ text: modifiedInput, images: attachedImages }, config);
+            if (res !== undefined) {
+                if (typeof res === 'object' && res !== null) {
+                    if (res.text !== undefined) modifiedInput = res.text;
+                    if (res.images !== undefined) attachedImages = res.images;
+                } else {
+                    modifiedInput = String(res);
+                }
+            }
+        } catch (e) {
+            console.log(chalk.yellow(`Warning: Plugin onBeforeMessage hook failed: ${e.message}`));
+        }
+    }
+
+    process.stdout.write(chalk.cyan('✦ '));
+    global.isAiSpeaking = true;
+    let responseText;
+    const messageCountBeforeResponse = Array.isArray(providerInstance.messages) ? providerInstance.messages.length : 0;
+    resetRemoteAiResponseTracking();
+    try {
+        responseText = await providerInstance.sendMessage({ text: modifiedInput, images: attachedImages, ultrathink: ultrathinkEnabled });
+    } finally {
+        global.isAiSpeaking = false;
+    }
+
+    if (
+        isEmptyAssistantResponse(responseText) &&
+        hasToolActivitySince(providerInstance, messageCountBeforeResponse)
+    ) {
+        console.log(chalk.gray('\n(Model returned no final message after tool use; asking it to continue...)'));
+        global.isAiSpeaking = true;
+        try {
+            responseText = await providerInstance.sendMessage(EMPTY_TOOL_RESPONSE_CONTINUATION);
+        } finally {
+            global.isAiSpeaking = false;
+        }
+    }
+
+    for (const hook of pluginRegistry.lifecycleHooks.onAfterMessage) {
+        try {
+            const res = await hook(responseText, config);
+            if (res !== undefined) responseText = res;
+        } catch (e) {
+            console.log(chalk.yellow(`Warning: Plugin onAfterMessage hook failed: ${e.message}`));
+        }
+    }
+
+    sendRemoteAiMessage(responseText);
+    finalizeTurn();
+    resetRemoteAiResponseTracking();
+
+    console.log();
+
+    const msgLen = providerInstance.messages ? providerInstance.messages.length : 0;
+    if (!currentSessionTitle && msgLen >= 3 || msgLen > 0 && msgLen % 10 === 0) {
+        const titleSpinner = ora({ text: 'Generating chat title...', color: 'gray', stream: process.stdout }).start();
+        try {
+            const originalUseMarked = config.useMarkedTerminal;
+            const originalDebug = config.debug;
+            config.useMarkedTerminal = false;
+            config.debug = false;
+
+            const titlePrompt = "SYSTEM: You are a title generator. Based on this conversation, provide a VERY SHORT (2-5 words) title. Reply ONLY with the title string, no quotes or formatting.";
+
+            const { AUTO_ROUTER_MODELS } = await import('./utils/autoModel.js');
+            const titleBaseConfig = getBananaSplitLocalConfig(config);
+            let titleModel = titleBaseConfig.model;
+
+            let providerKey = titleBaseConfig.provider;
+            if (providerKey === 'openai' && titleBaseConfig.authType === 'oauth') {
+                providerKey = 'openai_oauth';
+            }
+
+            if (AUTO_ROUTER_MODELS[providerKey]) {
+                titleModel = AUTO_ROUTER_MODELS[providerKey];
+            }
+
+            const titleConfig = {
+                ...titleBaseConfig,
+                bananaSplit: {
+                    ...titleBaseConfig.bananaSplit,
+                    enabled: false
+                },
+                isApiMode: true,
+                model: titleModel
+            };
+            const titleProvider = createProvider(titleConfig);
+
+            if (providerInstance.messages) {
+                titleProvider.messages = JSON.parse(JSON.stringify(providerInstance.messages));
+            }
+
+            const title = await titleProvider.sendMessage(titlePrompt);
+            currentSessionTitle = title.replace(/['"]/g, '').trim();
+
+            config.useMarkedTerminal = originalUseMarked;
+            config.debug = originalDebug;
+        } catch (e) {
+            // ignore title gen errors
+        }
+        titleSpinner.stop();
+    }
+
+    await saveSession(currentSessionId, {
+        provider: getActiveProviderId(),
+        model: providerInstance.modelName || config.model,
+        messages: providerInstance.messages,
+        title: currentSessionTitle || String(titleSource || '').trim().substring(0, 50)
+    });
+
+    if (config.useUltraMemory) {
+        const { runUltraMemoryBackground } = await import('./utils/ultraMemory.js');
+        runUltraMemoryBackground(config, createProvider);
+    }
+
+    return responseText;
+}
 
 async function handleSlashCommand(command) {
     const [cmd, ...args] = command.split(' ');
@@ -337,6 +471,66 @@ async function handleSlashCommand(command) {
                 console.log(chalk.cyan(`Remote tooling securely paired with account: ${result.uuid}`));
             }
             break;
+        case '/voice': {
+            if (args[0] === 'setup' || !hasUsableVoiceConfig(config)) {
+                config = await setupVoiceConfig(config);
+                await saveConfig(config);
+                if (args[0] === 'setup') {
+                    console.log(chalk.green(`Voice input configured for ${config.voice.model}.`));
+                    break;
+                }
+            }
+
+            let audioPath = null;
+            let shouldCleanupAudio = false;
+            const requestedAudioPath = args.join(' ').trim();
+
+            try {
+                if (requestedAudioPath) {
+                    const path = await import('path');
+                    const os = await import('os');
+                    let cleanedPath = requestedAudioPath;
+                    if ((cleanedPath.startsWith('"') && cleanedPath.endsWith('"')) || (cleanedPath.startsWith("'") && cleanedPath.endsWith("'"))) {
+                        cleanedPath = cleanedPath.slice(1, -1);
+                    }
+                    if (cleanedPath.startsWith('~')) {
+                        cleanedPath = path.join(os.homedir(), cleanedPath.slice(1));
+                    }
+                    audioPath = path.resolve(path.isAbsolute(cleanedPath) ? cleanedPath : path.join(process.cwd(), cleanedPath));
+                    if (!isSupportedVoiceFile(audioPath)) {
+                        console.log(chalk.yellow('Voice input accepts .mp3 or .wav files.'));
+                        break;
+                    }
+                } else {
+                    console.log(chalk.cyan('Starting voice recording...'));
+                    audioPath = await recordVoiceClip();
+                    shouldCleanupAudio = true;
+                }
+
+                const voice = getVoiceConfig(config);
+                const spinner = ora({ text: `Transcribing with Groq ${voice.model}...`, color: 'yellow', stream: process.stdout }).start();
+                let transcript;
+                try {
+                    transcript = await transcribeWithGroq({
+                        apiKey: voice.groqApiKey,
+                        model: voice.model,
+                        filePath: audioPath
+                    });
+                    spinner.stop();
+                } catch (err) {
+                    spinner.stop();
+                    throw err;
+                }
+
+                console.log(chalk.gray(`Transcribed: ${transcript}`));
+                await sendPromptToAi(transcript, { titleSource: transcript });
+            } catch (err) {
+                console.log(chalk.red(`Voice input failed: ${err.message}`));
+            } finally {
+                if (shouldCleanupAudio) await cleanupVoiceClip(audioPath);
+            }
+            break;
+        }
         case '/clear':
             providerInstance = createProvider(); // fresh instance = clear history
             console.log(chalk.green('Chat history cleared.'));
@@ -1143,6 +1337,9 @@ Available commands:
   /chats           - List persistent chat sessions
   /clear           - Clear chat history
   /clean           - Compress chat history into a summary to save tokens
+  /voice           - Record speech, transcribe with Groq Whisper, then ask the AI
+  /voice setup     - Configure Groq API key and Whisper model
+  /voice <file>    - Transcribe a .mp3/.wav file and ask the AI
   /remotetooling   - Securely pair with Mobile App for remote approvals
   /remotetooling migrate - Replace old UUID-only pairing with secure pairing
   /remotetooling disconnect - Disconnect Mobile App remote approvals
@@ -1217,8 +1414,14 @@ function isUltrathinkRainbowEnabled() {
 
 function stylePromptSegment(segment, isEmpty) {
     if (isEmpty) return chalk.gray(segment);
-    if (!isUltrathinkRainbowEnabled()) return chalk.white(segment);
-    return styleUltrathinkMentions(segment, chalk.white, ultrathinkAnimationFrame);
+    if (!isUltrathinkRainbowEnabled()) {
+        return styleVoiceCommands(segment, chalk.white, ultrathinkAnimationFrame);
+    }
+    return styleUltrathinkMentions(
+        segment,
+        value => styleVoiceCommands(value, chalk.white, ultrathinkAnimationFrame),
+        ultrathinkAnimationFrame
+    );
 }
 
 function playHistory(session) {
@@ -1496,7 +1699,10 @@ function promptUser() {
         };
 
         const syncUltrathinkAnimation = () => {
-            if (!isUltrathinkRainbowEnabled() || !/@ultrathink\b/i.test(inputBuffer)) {
+            const shouldAnimateUltrathink = isUltrathinkRainbowEnabled() && /@ultrathink\b/i.test(inputBuffer);
+            const shouldAnimateVoice = /(^|[\s([{])\/voice\b/i.test(inputBuffer);
+
+            if (!shouldAnimateUltrathink && !shouldAnimateVoice) {
                 stopUltrathinkAnimation();
                 return;
             }
