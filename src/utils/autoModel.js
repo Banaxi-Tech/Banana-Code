@@ -31,6 +31,12 @@ export const AUTO_MODEL_DESCRIPTIONS = {
     'codestral-latest':     'Mistral coding specialist. Best choice for any programming task.',
     'open-mistral-nemo':    'Open-source, very cheap. For simple questions, low-complexity work.',
     'pixtral-12b-2409':     'Mistral multimodal model. Use only if the task involves images.',
+    // DeepSeek
+    'deepseek-v4-pro':       'DeepSeek flagship V4 model. Best for hard coding tasks, complex reasoning, architecture, and agentic workflows.',
+    'deepseek-v4-flash':     'Fast and economical DeepSeek V4 model. Good default for everyday coding, quick fixes, and lower-latency work.',
+    // Kimi
+    'kimi-k2.6':              'Kimi flagship model. Best for long-horizon coding, agentic workflows, multimodal tasks, and complex software engineering.',
+    'kimi-k2.5':              'Highly capable Kimi model with strong coding, reasoning, tool use, and multimodal support.',
     // Ollama Cloud
     'kimi-k2-thinking:cloud':   'Advanced reasoning model. Best for complex multi-step problems and hard math.',
     'kimi-k2.5:cloud':          'Strong cloud model with good reasoning. Great all-rounder.',
@@ -47,6 +53,8 @@ export const AUTO_ROUTER_MODELS = {
     claude:         'claude-haiku-4-5',
     gemini:         'gemini-3.1-flash-lite-preview',
     mistral:        'mistral-small-latest',
+    deepseek:       'deepseek-v4-flash',
+    kimi:           'kimi-k2.5',
     ollama_cloud:   'gemma4:31b-cloud',
 };
 

@@ -56,13 +56,14 @@ While tools like Cursor provide great GUI experiences, Banana Code is built for 
 
 ## ✨ Key Features
 
-- **Multi-Provider Support**: Switch between **Google Gemini**, **Anthropic Claude**, **OpenAI** (API key or ChatGPT / Codex OAuth), **Mistral AI**, **OpenRouter** (any model ID; see [OpenRouter setup](#openrouter-setup)), **Ollama Cloud**, and **Ollama (Local)** effortlessly.
+- **Multi-Provider Support**: Switch between **Google Gemini**, **Anthropic Claude**, **OpenAI** (API key or ChatGPT / Codex OAuth), **Mistral AI**, **DeepSeek** (V4 Flash and V4 Pro), **Kimi AI** (K2.6 and K2.5), **OpenRouter** (any model ID; see [OpenRouter setup](#openrouter-setup)), **Ollama Cloud**, and **Ollama (Local)** effortlessly.
 - **Auto Mode**: For most providers, pick **Auto Mode** as your model — a small “router” model reads your prompt and chooses which model **and reasoning effort** to use for that turn.
 - **Interactive Terminal Suite**: Move beyond one-shot commands. The AI can now spawn persistent terminal sessions to handle interactive prompts like `npm init`, `git commit` (with editors), or Y/N confirmations in real-time.
 - **Financial Intelligence**: Track your exact API spend and savings. Banana Code uses server-side usage data to show you session costs and how much you've saved via **Prompt Caching**.
 - **Model Context Protocol (MCP)**: Connect Banana Code to any community-built MCP server (like SQLite, GitHub, Google Maps) to give your AI infinite new superpowers via `/beta`.
 - **Modes**: Use `/agent` for normal execution, **`/plan`** for [Plan mode](#plan-mode), **`/ask`** for [Ask mode](#ask-mode), **`/security`** for [Security mode](#security-mode), or **`/skill-creator`** for [Skill Creator mode](#skill-creator-mode).
 - **Hierarchical Sub-Agents**: The main AI can spawn specialized "sub-agents" (Researchers, Coders, Reviewers) to handle complex tasks without polluting your main chat history.
+- **ImageGen Support**: Configure a local Stable Diffusion/OpenAI-compatible image server with `/imagegen` so the AI can generate image assets, choose steps, save files, and stream progress previews to API clients.
 - **Self-Healing Loop**: If the AI runs a command (like running tests) and it fails, Banana Code automatically feeds the error trace back to the AI so it can fix its own code.
 - **Agent Skills**: Teach your AI specialized workflows. Drop a `SKILL.md` file in your config folder, and the AI will automatically activate it when relevant.
 - **Smart Context & Pruning**: Use `@file/path.js` to instantly inject file contents, auto-feed your workspace, and use `/clean` to instantly compress long chat histories to save tokens.
@@ -89,7 +90,7 @@ On your first run, Banana Code will walk you through a quick setup to configure 
 banana
 ```
 
-You'll need your API keys handy for Gemini, Claude, OpenAI (unless you use ChatGPT sign-in), Mistral, Ollama Cloud, or OpenRouter. For **OpenRouter**, you enter an API key and a custom model ID; Banana Code checks OpenRouter’s model list so the model supports **tool calling** before continuing.
+You'll need your API keys handy for Gemini, Claude, OpenAI (unless you use ChatGPT sign-in), Mistral, DeepSeek, Kimi AI, Ollama Cloud, or OpenRouter. For **Kimi AI**, use your Moonshot/Kimi API key. For **OpenRouter**, you enter an API key and a custom model ID; Banana Code checks OpenRouter’s model list so the model supports **tool calling** before continuing.
 
 ## 📖 Usage
 
@@ -124,12 +125,13 @@ While in a chat, use these special commands (type `/help` for the full list):
 
 | Command | What it does |
 |--------|----------------|
-| `/provider` | Switch provider: `gemini`, `claude`, `openai`, `mistral`, `openrouter`, `ollama_cloud`, `ollama` |
+| `/provider` | Switch provider: `gemini`, `claude`, `openai`, `mistral`, `deepseek`, `kimi`, `openrouter`, `ollama_cloud`, `ollama` |
 | `/model` | Change model; omit the name to open the menu (includes **Auto Mode** where supported). |
 | `/chats` | Browse and resume saved sessions (auto-titled). |
 | `/clear` | Clear the current conversation (same provider/model). |
 | `/clean` | Summarize long history into a short memory to save tokens (beta; enable in `/beta`). |
 | `/voice` | Record speech, transcribe with Groq Whisper V3/Turbo, then send the transcript to the AI. |
+| `/imagegen` | Configure Stable Diffusion image generation. The AI gets a `generate_image` tool that writes generated images to requested files. |
 | `/context` | Show message count and estimated tokens. |
 | `/settings` | Workspace auto-feed, markdown/syntax output, patch tool, token count, global memory, optional Puppeteer URL fetch. |
 | `/beta` | Beta tools (e.g. MCP, optional scrapers, `/clean`). |
@@ -150,12 +152,18 @@ While in a chat, use these special commands (type `/help` for the full list):
 | `/help` | Show all commands. |
 | `/exit` | Quit (also `Ctrl+D` / `Ctrl+C` flow). |
 
-**File context:** Type `@path/to/file` or `@@/absolute/path` in your message to attach file contents to that prompt. Use `@@path/to/image.png` to attach an image (supported by Gemini/Claude/OpenAI).
+**File context:** Type `@path/to/file` or `@@/absolute/path` in your message to attach file contents to that prompt. Use `@@path/to/image.png` to attach an image (supported by Gemini/Claude/OpenAI/Kimi K2.6/K2.5).
 
 **Voice input:** Type `/voice` to configure your Groq API key and choose `whisper-large-v3-turbo` or `whisper-large-v3` the first time. Later `/voice` starts a microphone recording, and `/voice path/to/audio.wav` or `/voice path/to/audio.mp3` transcribes an existing file.
 
+**Image generation:** Type `/imagegen` to configure an OpenAI-compatible image API base URL, such as `http://127.0.0.1:8000`, and select a model. Once enabled, the AI can call `generate_image` with a prompt, output path, and optional diffusion steps. API/WebSocket clients receive `image_generation_progress` previews and `image_generation_result` / `done.generatedImages` final references.
+
 ### ⚡ Auto Mode
 When **Auto Mode** is selected as the model (`/model` or initial setup), each new user message is first sent to a **small, fast router model** (per provider) together with the **last seven conversation messages** (formatted as context only). The router returns JSON: which concrete model should handle **this** turn and a short reason—so short follow-ups like “Implement it” can pick a capable model when the history shows a large task. The assistant’s reply then uses that model. If routing fails, providers fall back to a sensible default (e.g. Gemini may fall back to **Gemini 3 Flash**). **OpenRouter** and **local Ollama** do not offer Auto Mode (fixed model ID vs. local tag list).
+
+### Kimi AI setup
+
+[Kimi API](https://platform.kimi.ai) is Moonshot AI's OpenAI-compatible API. In Banana Code, choose **Kimi AI (Moonshot)** in `/provider`, paste your `MOONSHOT_API_KEY`, then choose `kimi-k2.6` or `kimi-k2.5`. Banana Code uses the official chat completions endpoint at `https://api.moonshot.ai/v1`.
 
 ### 🚀 Claude Fast Mode
 Select models like **Claude Opus 4.6 (Fast Mode)** from the `/model` menu to dramatically speed up your workflow. Fast Mode provides 2.5x faster output speeds for high-intensity tasks. 

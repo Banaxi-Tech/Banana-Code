@@ -13,6 +13,7 @@ export const BANANA_GUARD_MODELS = {
     claude:       'claude-sonnet-4-6',
     gemini:       'gemini-3.1-flash-lite-preview',
     mistral:      'mistral-large-latest',
+    deepseek:     'deepseek-v4-flash',
     ollama_cloud: 'minimax-m2.7:cloud',
 };
 

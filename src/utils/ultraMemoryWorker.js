@@ -8,6 +8,8 @@ import { OllamaProvider } from '../providers/ollama.js';
 import { OllamaCloudProvider } from '../providers/ollamaCloud.js';
 import { MistralProvider } from '../providers/mistral.js';
 import { OpenRouterProvider } from '../providers/openrouter.js';
+import { DeepSeekProvider } from '../providers/deepseek.js';
+import { KimiProvider } from '../providers/kimi.js';
 
 import fs from 'fs';
 
@@ -54,6 +56,8 @@ async function run() {
             case 'claude': return new ClaudeProvider(silentConfig);
             case 'openai': return new OpenAIProvider(silentConfig);
             case 'mistral': return new MistralProvider(silentConfig);
+            case 'deepseek': return new DeepSeekProvider(silentConfig);
+            case 'kimi': return new KimiProvider(silentConfig);
             case 'openrouter': return new OpenRouterProvider(silentConfig);
             case 'ollama_cloud': return new OllamaCloudProvider(silentConfig);
             case 'ollama': return new OllamaProvider(silentConfig);

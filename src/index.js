@@ -4,7 +4,7 @@
 import readline from 'readline';
 import chalk from 'chalk';
 import ora from 'ora';
-import { confirmProjectLocalSettingsTrust, getBananaSplitLocalConfig, loadConfig, saveConfig, setupBananaSplit, setupProvider } from './config.js';
+import { confirmProjectLocalSettingsTrust, getBananaSplitLocalConfig, loadConfig, saveConfig, setupBananaSplit, setupImageGen, setupProvider } from './config.js';
 import { runStartup } from './startup.js';
 import { getSessionPermissions, setYoloMode } from './permissions.js';
 import { cleanupTerminalSessions } from './tools/terminal.js';
@@ -17,6 +17,8 @@ import { OllamaProvider } from './providers/ollama.js';
 import { OllamaCloudProvider } from './providers/ollamaCloud.js';
 import { MistralProvider } from './providers/mistral.js';
 import { OpenRouterProvider } from './providers/openrouter.js';
+import { DeepSeekProvider } from './providers/deepseek.js';
+import { KimiProvider } from './providers/kimi.js';
 
 import { loadSession, saveSession, generateSessionId, getLatestSessionId, listSessions } from './sessions.js';
 import { getSystemPrompt } from './prompt.js';
@@ -59,6 +61,8 @@ function createProvider(overrideConfig = null) {
         case 'claude': return new ClaudeProvider(activeConfig);
         case 'openai': return new OpenAIProvider(activeConfig);
         case 'mistral': return new MistralProvider(activeConfig);
+        case 'deepseek': return new DeepSeekProvider(activeConfig);
+        case 'kimi': return new KimiProvider(activeConfig);
         case 'openrouter': return new OpenRouterProvider(activeConfig);
         case 'ollama_cloud': return new OllamaCloudProvider(activeConfig);
         case 'ollama': return new OllamaProvider(activeConfig);
@@ -276,6 +280,8 @@ async function handleSlashCommand(command) {
                     { name: 'Anthropic Claude', value: 'claude' },
                     { name: 'OpenAI', value: 'openai' },
                     { name: 'Mistral AI', value: 'mistral' },
+                    { name: 'DeepSeek', value: 'deepseek' },
+                    { name: 'Kimi AI (Moonshot)', value: 'kimi' },
                     { name: 'OpenRouter (Any Model)', value: 'openrouter' },
                     { name: 'Ollama Cloud', value: 'ollama_cloud' },
                     { name: 'Ollama (Local)', value: 'ollama' },
@@ -295,7 +301,7 @@ async function handleSlashCommand(command) {
                 });
             }
 
-            const isDefaultProv = ['gemini', 'claude', 'openai', 'mistral', 'openrouter', 'ollama_cloud', 'ollama', 'lmstudio'].includes(newProv);
+            const isDefaultProv = ['gemini', 'claude', 'openai', 'mistral', 'deepseek', 'kimi', 'openrouter', 'ollama_cloud', 'ollama', 'lmstudio'].includes(newProv);
             const isPluginProv = pluginRegistry.providers[newProv] !== undefined;
 
             if (isDefaultProv || isPluginProv) {
@@ -305,7 +311,7 @@ async function handleSlashCommand(command) {
                 providerInstance = createProvider();
                 console.log(chalk.green(`Switched provider to ${newProv} (${config.model}).`));
             } else {
-                console.log(chalk.yellow(`Usage: /provider <gemini|claude|openai|mistral|openrouter|ollama_cloud|ollama|lmstudio>`));
+                console.log(chalk.yellow(`Usage: /provider <gemini|claude|openai|mistral|deepseek|kimi|openrouter|ollama_cloud|ollama|lmstudio>`));
             }
             break;
         case '/model':
@@ -316,7 +322,7 @@ async function handleSlashCommand(command) {
             if (!newModel) {
                 // Interactive selection
                 const { select } = await import('@inquirer/prompts');
-                const { GEMINI_MODELS, CLAUDE_MODELS, OPENAI_MODELS, CODEX_MODELS, OLLAMA_CLOUD_MODELS, MISTRAL_MODELS } = await import('./constants.js');
+                const { GEMINI_MODELS, CLAUDE_MODELS, OPENAI_MODELS, CODEX_MODELS, OLLAMA_CLOUD_MODELS, MISTRAL_MODELS, DEEPSEEK_MODELS, KIMI_MODELS } = await import('./constants.js');
 
                 const AUTO_CHOICE = { name: chalk.cyan('⚡ Auto Mode') + chalk.gray(' (AI picks the best model per prompt)'), value: 'auto' };
                 let choices = [];
@@ -327,6 +333,10 @@ async function handleSlashCommand(command) {
                     choices = [AUTO_CHOICE, ...base];
                 } else if (activeModelProvider === 'mistral') {
                     choices = [AUTO_CHOICE, ...MISTRAL_MODELS];
+                } else if (activeModelProvider === 'deepseek') {
+                    choices = [AUTO_CHOICE, ...DEEPSEEK_MODELS];
+                } else if (activeModelProvider === 'kimi') {
+                    choices = [AUTO_CHOICE, ...KIMI_MODELS];
                 } else if (activeModelProvider === 'openrouter') {
                     // Re-run setup flow so the user gets full validation
                     config = await setupProvider('openrouter', config);
@@ -371,7 +381,7 @@ async function handleSlashCommand(command) {
 
                 if (choices.length > 0) {
                     const finalChoices = [...choices];
-                    if (activeModelProvider === 'ollama_cloud' || activeModelProvider === 'mistral') {
+                    if (activeModelProvider === 'ollama_cloud' || activeModelProvider === 'mistral' || activeModelProvider === 'deepseek' || activeModelProvider === 'kimi') {
                         finalChoices.push({ name: chalk.magenta('✎ Enter custom model ID...'), value: 'CUSTOM_ID' });
                     }
 
@@ -384,8 +394,15 @@ async function handleSlashCommand(command) {
 
                     if (newModel === 'CUSTOM_ID') {
                         const { input } = await import('@inquirer/prompts');
+                        const exampleModel = activeModelProvider === 'deepseek'
+                            ? 'deepseek-v4-flash'
+                            : activeModelProvider === 'mistral'
+                                ? 'mistral-large-latest'
+                                : activeModelProvider === 'kimi'
+                                    ? 'kimi-k2.6'
+                                    : 'gemma3:27b-cloud';
                         newModel = await input({
-                            message: 'Enter the exact model ID (e.g., gemma3:27b-cloud):',
+                            message: `Enter the exact model ID (e.g., ${exampleModel}):`,
                             validate: (v) => v.trim().length > 0 || 'Model ID cannot be empty'
                         });
                     }
@@ -1001,6 +1018,49 @@ async function handleSlashCommand(command) {
             console.log(chalk.green(`BananaSplit enabled. Local: ${local.provider}/${local.model}. Reviewer: ${reviewer.provider}/${reviewer.model}.`));
             break;
         }
+        case '/imagegen': {
+            const subCmd = (args[0] || '').toLowerCase();
+
+            if (subCmd === 'disable' || subCmd === 'off') {
+                if (!config.imageGen?.enabled) {
+                    console.log(chalk.yellow('ImageGen is already disabled.'));
+                    break;
+                }
+
+                config.imageGen = {
+                    ...config.imageGen,
+                    enabled: false
+                };
+                await saveConfig(config);
+                global.bananaConfig = config;
+                replaceProviderForCurrentConfig({ preservePortableHistory: true });
+                console.log(chalk.green('ImageGen disabled. The generate_image tool is no longer available.'));
+                break;
+            }
+
+            if (subCmd && !['setup', 'configure'].includes(subCmd)) {
+                console.log(chalk.yellow('Usage: /imagegen [disable|setup]'));
+                break;
+            }
+
+            const shouldConfigure = !config.imageGen?.baseUrl ||
+                !config.imageGen?.model ||
+                ['setup', 'configure'].includes(subCmd) ||
+                (config.imageGen?.enabled && !subCmd);
+
+            if (shouldConfigure) {
+                config = await setupImageGen(config);
+            } else {
+                config.imageGen.enabled = true;
+            }
+
+            await saveConfig(config);
+            global.bananaConfig = config;
+            replaceProviderForCurrentConfig({ preservePortableHistory: true });
+
+            console.log(chalk.green(`ImageGen enabled. Model: ${config.imageGen.model}. Base URL: ${config.imageGen.baseUrl}.`));
+            break;
+        }
         case '/style': {
             const { select: styleSelect } = await import('@inquirer/prompts');
             const selectedStyle = await styleSelect({
@@ -1332,7 +1392,7 @@ async function handleSlashCommand(command) {
         case '/help':
             console.log(chalk.yellow(`
 Available commands:
-  /provider <name> - Switch AI provider (gemini, claude, openai, mistral, openrouter, ollama_cloud, ollama)
+  /provider <name> - Switch AI provider (gemini, claude, openai, mistral, deepseek, kimi, openrouter, ollama_cloud, ollama)
   /model [name]    - Switch model within current provider (opens menu if name omitted)
   /chats           - List persistent chat sessions
   /clear           - Clear chat history
@@ -1357,6 +1417,7 @@ Available commands:
   /deepreview      - Enable DeepReview mode (Full codebase audit OR git diff review, no edits)
   /guard           - Toggle Banana Guard (AI auto-approve safe commands)
   /bananasplit     - Toggle BananaSplit local coding with cloud review (/bananasplit disable to turn off)
+  /imagegen        - Configure Stable Diffusion image generation tool (/imagegen disable to turn off)
   /yolo            - Toggle YOLO mode (skip all permission requests)
   /style           - Change AI writing style (Formal, Explanatory, etc)
   /emoji           - Change AI emoji usage (Normal, Minimal, More)

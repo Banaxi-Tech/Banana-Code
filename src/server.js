@@ -11,7 +11,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
-import { loadConfig, saveConfig, copyBananaSplitProviderConfig, getBananaSplitLocalConfig } from './config.js';
+import { DEFAULT_IMAGEGEN_BASE_URL, listImageGenModels, loadConfig, normalizeImageGenBaseUrl, saveConfig, copyBananaSplitProviderConfig, getBananaSplitLocalConfig } from './config.js';
 import { listSessions, loadSession, saveSession, generateSessionId } from './sessions.js';
 import { getSessionPermissions, setYoloMode } from './permissions.js';
 import { getContextBreakdown } from './utils/tokens.js';
@@ -23,10 +23,12 @@ import { GROQ_WHISPER_MODELS, getVoiceConfig, mimeTypeFromFileName, transcribeWi
 const PROVIDER_REINIT_KEYS = new Set([
     'provider',
     'model',
+    'apiKey',
     'betaTools',
     'usePatchFile',
     'useMemory',
     'bananaSplit',
+    'imageGen',
     'planMode',
     'askMode',
     'securityMode',
@@ -38,7 +40,7 @@ const PROVIDER_REINIT_KEYS = new Set([
 ]);
 
 const LOCAL_BANANA_SPLIT_PROVIDERS = new Set(['ollama', 'lmstudio']);
-const REVIEWER_BANANA_SPLIT_PROVIDERS = new Set(['gemini', 'claude', 'openai', 'mistral', 'openrouter', 'ollama_cloud']);
+const REVIEWER_BANANA_SPLIT_PROVIDERS = new Set(['gemini', 'claude', 'openai', 'mistral', 'deepseek', 'kimi', 'openrouter', 'ollama_cloud']);
 const IMAGE_EXTENSIONS = new Map([
     ['.png', 'image/png'],
     ['.jpg', 'image/jpeg'],
@@ -205,13 +207,50 @@ function normalizeBananaSplitConfig(input = {}, currentConfig = {}) {
         throw new Error('BananaSplit local provider must be ollama or lmstudio.');
     }
     if (!REVIEWER_BANANA_SPLIT_PROVIDERS.has(reviewerProvider)) {
-        throw new Error('BananaSplit reviewer provider must be one of gemini, claude, openai, mistral, openrouter, ollama_cloud.');
+        throw new Error('BananaSplit reviewer provider must be one of gemini, claude, openai, mistral, deepseek, kimi, openrouter, ollama_cloud.');
     }
 
     return {
         enabled: true,
         local: copyBananaSplitProviderConfig(localProvider, localInput),
         reviewer: copyBananaSplitProviderConfig(reviewerProvider, reviewerInput)
+    };
+}
+
+async function normalizeImageGenConfig(input = {}, currentConfig = {}) {
+    const existing = currentConfig.imageGen || {};
+    const baseUrl = normalizeImageGenBaseUrl(input.baseUrl || existing.baseUrl || DEFAULT_IMAGEGEN_BASE_URL);
+    const model = typeof input.model === 'string' ? input.model.trim() : existing.model;
+    const realtimeProgress = input.realtimeProgress !== undefined
+        ? input.realtimeProgress !== false
+        : existing.realtimeProgress !== false;
+    const enabled = input.enabled !== false;
+    if (!enabled) {
+        return {
+            ...existing,
+            baseUrl,
+            model,
+            realtimeProgress,
+            enabled: false
+        };
+    }
+
+    let resolvedModel = model;
+
+    if (!resolvedModel) {
+        const discovery = await listImageGenModels(baseUrl);
+        resolvedModel = discovery.models[0];
+    }
+
+    if (!resolvedModel) {
+        throw new Error('ImageGen model is required. Call list_imagegen_models or provide config.model.');
+    }
+
+    return {
+        enabled: true,
+        baseUrl,
+        model: resolvedModel,
+        realtimeProgress
     };
 }
 
@@ -305,6 +344,8 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
         providerInstance.onChunk = null;
         providerInstance.onToolStart = null;
         providerInstance.onToolEnd = null;
+        providerInstance.config.onImageGenProgress = null;
+        providerInstance.config.onImageGenResult = null;
 
         const preparedInput = await prepareChatInput(text, [], workspace);
         const providerInput = preparedInput.images.length > 0
@@ -578,6 +619,33 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                     return;
                 }
 
+                if (data.type === 'list_imagegen_models') {
+                    const baseUrl = normalizeImageGenBaseUrl(data.baseUrl || config.imageGen?.baseUrl || DEFAULT_IMAGEGEN_BASE_URL);
+                    try {
+                        const discovery = await listImageGenModels(baseUrl);
+                        ws.send(JSON.stringify({ type: 'imagegen_models', ...discovery }));
+                    } catch (err) {
+                        ws.send(JSON.stringify({ type: 'error', message: err.message }));
+                    }
+                    return;
+                }
+
+                if (data.type === 'set_imagegen') {
+                    const previousConfig = config;
+                    config = {
+                        ...config,
+                        imageGen: await normalizeImageGenConfig(data.config || data.imageGen || {}, config)
+                    };
+                    global.bananaConfig = config;
+                    if (providerInstance) {
+                        providerInstance = reinitializeProviderPreservingHistory(providerInstance, createProvider, previousConfig, config);
+                        await refreshSystemPrompt(providerInstance, config);
+                    }
+                    await saveConfig(config);
+                    ws.send(JSON.stringify({ type: 'config_updated', config }));
+                    return;
+                }
+
                 if (data.type === 'list_sessions') {
                     const allSessions = await listSessions();
                     // Strip out full messages to keep the list small
@@ -807,6 +875,20 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                             ws.send(JSON.stringify({ type: 'tool_end', result }));
                         }
                     };
+                    const generatedImages = [];
+                    providerInstance.config.onImageGenProgress = (payload) => {
+                        if (ws.readyState === ws.OPEN) {
+                            ws.send(JSON.stringify({ type: 'image_generation_progress', ...payload }));
+                        }
+                    };
+                    providerInstance.config.onImageGenResult = (payload) => {
+                        if (Array.isArray(payload?.images)) {
+                            generatedImages.push(...payload.images);
+                        }
+                        if (ws.readyState === ws.OPEN) {
+                            ws.send(JSON.stringify({ type: 'image_generation_result', ...payload }));
+                        }
+                    };
 
                     console.log(chalk.gray(`[API] Sending message to AI...`));
                     const preparedInput = await prepareChatInput(effectiveUserText, data.attachments || [], currentWorkspace);
@@ -844,7 +926,8 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                         ws.send(JSON.stringify({ 
                             type: 'done', 
                             finalResponse: response,
-                            usage: financial 
+                            usage: financial,
+                            generatedImages
                         }));
                     }
                 }

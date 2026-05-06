@@ -19,7 +19,7 @@ Only the total download count (an integer) is saved. No personally identifiable 
 
 ### 2.2 API Keys
 
-Your AI provider API keys (OpenAI, Anthropic, Google Gemini, Mistral, etc.) are stored **locally only** in your home directory (`~/.config/banana-code/config.json`). They are never transmitted to our servers.
+Your AI provider API keys (OpenAI, Anthropic, Google Gemini, Mistral, DeepSeek, Kimi AI, etc.) are stored **locally only** in your home directory (`~/.config/banana-code/config.json`). They are never transmitted to our servers.
 
 ### 2.3 Chat History & Sessions
 
@@ -27,7 +27,7 @@ All chat history and session files are stored **locally only** in your home dire
 
 ### 2.4 Workspace & File Contents
 
-Banana Code reads your local files when you use `@file` mentions, `write_file`, `patch_file`, or the workspace auto-feed feature. This content is sent directly from your machine to the AI provider you have configured (e.g. Anthropic, Google, OpenAI). We do not intercept, store, or process this data.
+Banana Code reads your local files when you use `@file` mentions, `write_file`, `patch_file`, or the workspace auto-feed feature. This content is sent directly from your machine to the AI provider you have configured (e.g. Anthropic, Google, OpenAI, DeepSeek, Kimi AI). We do not intercept, store, or process this data.
 
 ## 3. Banana Code Remote (Android App) — Data Collected
 
@@ -87,7 +87,7 @@ Short-lived alphanumeric pairing codes (used to link your CLI to your phone) are
 
 ## 6. Third-Party AI Providers
 
-When you use Banana Code, your prompts and file contents are sent directly to the AI provider you configured (Google, Anthropic, OpenAI, Mistral, etc.). Their own privacy policies govern how they handle this data. Banana Code does not intermediate or receive copies of these messages.
+When you use Banana Code, your prompts and file contents are sent directly to the AI provider you configured (Google, Anthropic, OpenAI, Mistral, DeepSeek, Kimi AI, etc.). Their own privacy policies govern how they handle this data. Banana Code does not intermediate or receive copies of these messages.
 
 ## 7. Children's Privacy
 
@@ -115,4 +115,3 @@ Questions or requests regarding this Privacy Policy:
 
 - Email: **[banaxitech@gmail.com](mailto:banaxitech@gmail.com)**
 - GitHub: [github.com/banaxi-tech/banana-code](https://github.com/banaxi-tech/banana-code)
-

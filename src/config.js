@@ -9,13 +9,14 @@ import { execSync } from 'child_process';
 import fsSync from 'fs';
 import chalk from 'chalk';
 
-import { GEMINI_MODELS, CLAUDE_MODELS, OPENAI_MODELS, CODEX_MODELS, OLLAMA_CLOUD_MODELS, MISTRAL_MODELS } from './constants.js';
+import { GEMINI_MODELS, CLAUDE_MODELS, OPENAI_MODELS, CODEX_MODELS, OLLAMA_CLOUD_MODELS, MISTRAL_MODELS, DEEPSEEK_MODELS, KIMI_MODELS } from './constants.js';
 import { pluginRegistry } from './utils/plugins.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.config', 'banana-code');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 const PROJECT_LOCAL_SETTINGS_RELATIVE_PATH = path.join('.banana', 'settings.local.json');
 const PROJECT_LOCAL_CONFIG_METADATA = Symbol('projectLocalConfigMetadata');
+export const DEFAULT_IMAGEGEN_BASE_URL = 'http://127.0.0.1:8000';
 
 function isPlainObject(value) {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -79,7 +80,7 @@ function markProjectLocalConfig(config, globalConfig, localSettings) {
 }
 
 function getPersistentConfig(config) {
-    const { isApiMode, onChunk, onToolStart, onToolEnd, ...persistentConfig } = config;
+    const { isApiMode, onChunk, onToolStart, onToolEnd, onImageGenProgress, onImageGenResult, ...persistentConfig } = config;
     const metadata = config[PROJECT_LOCAL_CONFIG_METADATA];
 
     if (!metadata) {
@@ -258,6 +259,74 @@ export function getBananaSplitReviewerConfig(config) {
     };
 }
 
+export function normalizeImageGenBaseUrl(baseUrl = DEFAULT_IMAGEGEN_BASE_URL) {
+    const trimmed = String(baseUrl || DEFAULT_IMAGEGEN_BASE_URL).trim();
+    return trimmed.replace(/\/+$/, '');
+}
+
+export async function listImageGenModels(baseUrl = DEFAULT_IMAGEGEN_BASE_URL) {
+    const normalizedBaseUrl = normalizeImageGenBaseUrl(baseUrl);
+    const response = await fetch(`${normalizedBaseUrl}/v1/models`);
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+        const message = data.error?.message || data.error || response.statusText;
+        throw new Error(`ImageGen model discovery failed at ${normalizedBaseUrl}: ${message}`);
+    }
+
+    const models = Array.isArray(data.data)
+        ? data.data.map(model => model?.id).filter(Boolean)
+        : [];
+
+    return { baseUrl: normalizedBaseUrl, models };
+}
+
+export async function setupImageGen(config = {}) {
+    const existing = config.imageGen || {};
+
+    console.log(chalk.cyan('\nImageGen uses an OpenAI-compatible Stable Diffusion image API.'));
+
+    const baseUrl = normalizeImageGenBaseUrl(await input({
+        message: 'Enter your ImageGen API base URL:',
+        default: existing.baseUrl || DEFAULT_IMAGEGEN_BASE_URL,
+        validate: (value) => String(value || '').trim().length > 0 || 'Base URL cannot be empty'
+    }));
+
+    let choices = [];
+    try {
+        console.log(chalk.cyan(`Detecting ImageGen models at ${baseUrl}...`));
+        const discovery = await listImageGenModels(baseUrl);
+        choices = discovery.models.map(model => ({ name: model, value: model }));
+    } catch (error) {
+        console.log(chalk.yellow(error.message));
+    }
+
+    let model;
+    if (choices.length > 0) {
+        model = await select({
+            message: 'Select an ImageGen model:',
+            choices,
+            default: existing.model && choices.some(choice => choice.value === existing.model) ? existing.model : undefined,
+            loop: false
+        });
+    } else {
+        model = await input({
+            message: 'Enter ImageGen model ID:',
+            default: existing.model || 'sd35_medium',
+            validate: (value) => String(value || '').trim().length > 0 || 'Model ID cannot be empty'
+        });
+    }
+
+    config.imageGen = {
+        enabled: true,
+        baseUrl,
+        model: model.trim(),
+        realtimeProgress: existing.realtimeProgress !== false
+    };
+
+    return config;
+}
+
 export async function setupBananaSplit(config = {}) {
     const existing = config.bananaSplit || {};
 
@@ -284,6 +353,8 @@ export async function setupBananaSplit(config = {}) {
         { name: 'Anthropic Claude', value: 'claude' },
         { name: 'OpenAI', value: 'openai' },
         { name: 'Mistral AI', value: 'mistral' },
+        { name: 'DeepSeek', value: 'deepseek' },
+        { name: 'Kimi AI (Moonshot)', value: 'kimi' },
         { name: 'OpenRouter (Any Model)', value: 'openrouter' },
         { name: 'Ollama Cloud', value: 'ollama_cloud' }
     ];
@@ -400,6 +471,48 @@ export async function setupProvider(provider, config = {}) {
         if (selectedModel === 'CUSTOM_ID') {
             selectedModel = await input({
                 message: 'Enter the exact Mistral model ID (e.g., mistral-large-latest):',
+                validate: (v) => v.trim().length > 0 || 'Model ID cannot be empty'
+            });
+        }
+        config.model = selectedModel;
+    } else if (provider === 'deepseek') {
+        config.apiKey = await input({
+            message: 'Enter your DEEPSEEK_API_KEY (from platform.deepseek.com):',
+            default: config.apiKey
+        });
+
+        const choices = [AUTO_CHOICE, ...DEEPSEEK_MODELS, { name: chalk.magenta('✎ Enter custom model ID...'), value: 'CUSTOM_ID' }];
+        let selectedModel = await select({
+            message: 'Select a DeepSeek model:',
+            choices,
+            loop: false,
+            pageSize: 10
+        });
+
+        if (selectedModel === 'CUSTOM_ID') {
+            selectedModel = await input({
+                message: 'Enter the exact DeepSeek model ID (e.g., deepseek-v4-flash):',
+                validate: (v) => v.trim().length > 0 || 'Model ID cannot be empty'
+            });
+        }
+        config.model = selectedModel;
+    } else if (provider === 'kimi') {
+        config.apiKey = await input({
+            message: 'Enter your MOONSHOT_API_KEY (from platform.kimi.ai):',
+            default: config.apiKey
+        });
+
+        const choices = [AUTO_CHOICE, ...KIMI_MODELS, { name: chalk.magenta('✎ Enter custom model ID...'), value: 'CUSTOM_ID' }];
+        let selectedModel = await select({
+            message: 'Select a Kimi model:',
+            choices,
+            loop: false,
+            pageSize: 12
+        });
+
+        if (selectedModel === 'CUSTOM_ID') {
+            selectedModel = await input({
+                message: 'Enter the exact Kimi model ID (e.g., kimi-k2.6):',
                 validate: (v) => v.trim().length > 0 || 'Model ID cannot be empty'
             });
         }
@@ -591,6 +704,8 @@ async function runSetupWizard() {
             { name: 'Anthropic Claude', value: 'claude' },
             { name: 'OpenAI', value: 'openai' },
             { name: 'Mistral AI', value: 'mistral' },
+            { name: 'DeepSeek', value: 'deepseek' },
+            { name: 'Kimi AI (Moonshot)', value: 'kimi' },
             { name: 'OpenRouter (Any Model)', value: 'openrouter' },
             { name: 'Ollama Cloud', value: 'ollama_cloud' },
             { name: 'Ollama (Local)', value: 'ollama' },

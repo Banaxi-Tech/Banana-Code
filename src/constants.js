@@ -45,6 +45,16 @@ export const MISTRAL_MODELS = [
     { name: 'Pixtral 12B', value: 'pixtral-12b-2409' }
 ];
 
+export const DEEPSEEK_MODELS = [
+    { name: 'DeepSeek V4 Pro (Newest, most capable)', value: 'deepseek-v4-pro' },
+    { name: 'DeepSeek V4 Flash (Newest, fast)', value: 'deepseek-v4-flash' }
+];
+
+export const KIMI_MODELS = [
+    { name: 'Kimi K2.6 (Newest, multimodal, 256K)', value: 'kimi-k2.6' },
+    { name: 'Kimi K2.5 (multimodal, 256K)', value: 'kimi-k2.5' }
+];
+
 export const CODEX_MODELS = [
     { name: 'GPT-5.5 (Newest)', value: 'gpt-5.5' },
     { name: 'GPT-5.4', value: 'gpt-5.4' },

@@ -78,6 +78,23 @@ export function sendRemoteToolEvent({ id = crypto.randomUUID(), actionType, deta
     socket.emit('tool_event', eventData);
 }
 
+export function sendRemoteImageGenEvent(type, payload = {}) {
+    if (!socket || !isConnected || !type) {
+        return;
+    }
+
+    if (!currentTurnId) {
+        currentTurnId = crypto.randomUUID();
+    }
+
+    socket.emit('imagegen_event', {
+        type,
+        payload,
+        turnId: currentTurnId,
+        timestamp: Date.now()
+    });
+}
+
 export async function redeemRemotePairingCode(pairingCode) {
     const code = String(pairingCode || '').trim().toUpperCase();
     if (!code) {

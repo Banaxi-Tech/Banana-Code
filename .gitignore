@@ -13,3 +13,5 @@ your_image.png
 # Logs and Tests
 *.log
 tests/
+
+.claude/settings.local.json

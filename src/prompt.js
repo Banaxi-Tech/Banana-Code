@@ -120,6 +120,17 @@ BananaSplit is active. You are running as the local coding model, and a separate
 `;
     }
 
+    if (config.imageGen?.enabled) {
+        prompt += `
+\n# Image Generation
+ImageGen is enabled through the \`generate_image\` tool.
+- Use it when the user asks you to create or modify an image asset.
+- Always provide a detailed visual \`prompt\` and a concrete \`outputPath\` where the generated image should be saved.
+- You may set \`steps\` to control quality and latency. Use fewer steps for quick drafts and more steps for higher quality.
+- The configured default model is \`${config.imageGen.model || 'not set'}\`; override \`model\` only when the user asks for a specific ImageGen model.
+`;
+    }
+
     if (config.planMode) {
         prompt += `
 [PLAN MODE ENABLED]

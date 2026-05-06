@@ -497,6 +497,22 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('imagegen_event', async (data) => {
+    try {
+      if (socket.role !== 'cli' || !socket.uuid) return;
+      const { type, payload, turnId, timestamp } = data || {};
+      if (!type || !turnId) return;
+
+      socket.to(socket.uuid).emit(type, {
+        ...(payload && typeof payload === 'object' ? payload : {}),
+        turnId,
+        timestamp
+      });
+    } catch (err) {
+      console.error('[Socket ImageGen Event Error]:', err);
+    }
+  });
+
   socket.on('tool_response', async (data) => {
     try {
       if (socket.role !== 'app' || !socket.uuid) return;

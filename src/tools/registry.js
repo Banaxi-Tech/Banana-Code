@@ -18,6 +18,7 @@ import { activateSkill } from './activateSkill.js';
 import { delegateTask } from './delegateTask.js';
 import { bananasplitReview } from './bananasplitReview.js';
 import { renameFile } from './renameFile.js';
+import { generateImage } from './imageGen.js';
 import { mcpManager } from '../utils/mcp.js';
 import { saveMemoryTool, listMemoryTool, deleteMemoryTool, saveProjectMemoryTool, listProjectMemoryTool, deleteProjectMemoryTool } from './memoryTools.js';
 import { pluginRegistry } from '../utils/plugins.js';
@@ -114,6 +115,29 @@ export const TOOLS = [
                 content: { type: 'string', description: 'The content to write' }
             },
             required: ['filepath', 'content']
+        }
+    },
+    {
+        name: 'generate_image',
+        label: 'ImageGen Stable Diffusion',
+        description: 'Generate an image with the configured ImageGen Stable Diffusion server and save it to an output file. Use this when the user asks for a new image asset. The prompt should be vivid and complete; outputPath is where the generated image should be written.',
+        parameters: {
+            type: 'object',
+            properties: {
+                prompt: { type: 'string', description: 'Detailed image generation prompt.' },
+                outputPath: { type: 'string', description: 'Path where the final generated image should be saved, for example assets/hero.png.' },
+                steps: { type: 'integer', description: 'Number of diffusion inference steps. Higher is slower and often higher quality. Range: 1-100.' },
+                model: { type: 'string', description: 'Optional ImageGen model ID. Defaults to the configured /imagegen model.' },
+                size: { type: 'string', description: 'Optional WIDTHxHEIGHT size, for example 1024x1024. Width and height must be divisible by 8.' },
+                n: { type: 'integer', description: 'Optional number of images to generate. Range: 1-4.' },
+                response_format: { type: 'string', enum: ['url', 'b64_json'], description: 'Optional final image response format from the ImageGen server. Defaults to url.' },
+                progress_format: { type: 'string', enum: ['url', 'b64_json', 'none'], description: 'Optional per-step preview format. Defaults to url when streaming progress is available.' },
+                progress_interval: { type: 'integer', description: 'Optional interval for progress previews, in diffusion steps. Range: 1-100.' },
+                negative_prompt: { type: 'string', description: 'Optional negative prompt.' },
+                seed: { type: 'integer', description: 'Optional deterministic seed.' },
+                guidance_scale: { type: 'number', description: 'Optional guidance scale. Range: 0-30.' }
+            },
+            required: ['prompt', 'outputPath']
         }
     },
     {
@@ -364,6 +388,7 @@ export const TOOLS = [
 export function getAvailableTools(config = {}) {
     let available = TOOLS.filter(tool => {
         if (tool.name === 'bananasplit_review' && config.bananaSplit?.enabled !== true) return false;
+        if (tool.name === 'generate_image' && config.imageGen?.enabled !== true) return false;
         if (config.bananaSplitReviewerMode) {
             const allowedForBananaSplitReview = [
                 'read_file', 'read_many_files', 'search_files',
@@ -483,6 +508,7 @@ export async function executeTool(name, args, config) {
         case 'list_project_memory': return await listProjectMemoryTool(args);
         case 'delete_project_memory': return await deleteProjectMemoryTool(args);
         case 'rename_file': return await renameFile(args);
+        case 'generate_image': return await generateImage(args, config);
         default: return `Unknown tool: ${name}`;
     }
 }

@@ -30,6 +30,10 @@ export function getRandomSpinnerText(provider) {
                 return 'Gemming...';
             case 'mistral':
                 return 'Mistraling...';
+            case 'deepseek':
+                return 'DeepSeeking...';
+            case 'kimi':
+                return 'Kimiing...';
             case 'openrouter':
                 return 'Routing...';
             case 'ollama':
