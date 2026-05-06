@@ -13,6 +13,24 @@ import { AUTO_MODEL_DESCRIPTIONS, AUTO_ROUTER_MODELS, buildRoutingPrompt, parseR
 import { sendRemoteAiSegment } from '../remote.js';
 import { extractUltrathinkDirective } from '../utils/ultrathink.js';
 
+function claudeToolResultContent(toolResult) {
+    const text = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
+    const screenshot = toolResult?.__browserScreenshot;
+    if (!screenshot?.base64 || !screenshot?.mimeType) return text;
+
+    return [
+        { type: 'text', text },
+        {
+            type: 'image',
+            source: {
+                type: 'base64',
+                media_type: screenshot.mimeType,
+                data: screenshot.base64
+            }
+        }
+    ];
+}
+
 export class ClaudeProvider {
     constructor(config) {
         this.config = config;
@@ -378,7 +396,7 @@ export class ClaudeProvider {
                     toolResultContent.push({
                         type: 'tool_result',
                         tool_use_id: call.id,
-                        content: typeof res === 'string' ? res : JSON.stringify(res)
+                        content: claudeToolResultContent(res)
                     });
                 }
 

@@ -21,6 +21,30 @@ function getCodexReasoningEffort(config) {
         : 'medium';
 }
 
+function browserScreenshotMessage(toolResult, config = {}) {
+    const screenshot = toolResult?.__browserScreenshot;
+    if (!screenshot?.base64 || !screenshot?.mimeType) return null;
+    if (config.authType === 'oauth') {
+        return {
+            role: 'user',
+            content: 'Browser screenshot for the latest observation:',
+            attachedImages: [{ base64: screenshot.base64, mimeType: screenshot.mimeType }]
+        };
+    }
+    return {
+        role: 'user',
+        content: [
+            { type: 'text', text: 'Browser screenshot for the latest observation:' },
+            {
+                type: 'image_url',
+                image_url: {
+                    url: `data:${screenshot.mimeType};base64,${screenshot.base64}`
+                }
+            }
+        ]
+    };
+}
+
 /**
  * Notice: Parts of the OAuth authentication flow and SSE streaming logic in this file 
  * are derived from or inspired by the 'opencode-openai-codex-auth' package 
@@ -341,6 +365,7 @@ export class OpenAIProvider {
                     content: chunkResponse || null
                 });
 
+                const browserScreenshotMessages = [];
                 for (const call of toolCalls) {
                     if (this.config.isApiMode && this.onToolStart) {
                         this.onToolStart(call.function.name);
@@ -378,7 +403,10 @@ export class OpenAIProvider {
                         tool_call_id: call.id,
                         content: typeof res === 'string' ? res : JSON.stringify(res)
                     });
+                    const screenshotMessage = browserScreenshotMessage(res, this.config);
+                    if (screenshotMessage) browserScreenshotMessages.push(screenshotMessage);
                 }
+                this.messages.push(...browserScreenshotMessages);
 
                 if (!this.config.isApiMode) {
                     spinner = ora({ text: 'Processing tool results...', color: 'yellow', stream: process.stdout }).start();
@@ -481,7 +509,7 @@ export class OpenAIProvider {
                         if (msg.attachedImages) {
                             for (const img of msg.attachedImages) {
                                 contentParts.push({
-                                    type: 'image',
+                                    type: 'input_image',
                                     image_url: `data:${img.mimeType};base64,${img.base64}`
                                 });
                             }
@@ -695,6 +723,7 @@ export class OpenAIProvider {
                     content: currentChunkResponse || null
                 });
 
+                const browserScreenshotMessages = [];
                 for (const call of activeToolCalls) {
                     if (this.config.isApiMode && this.onToolStart) {
                         this.onToolStart(call.function.name);
@@ -732,7 +761,10 @@ export class OpenAIProvider {
                         tool_call_id: call.id,
                         content: typeof res === 'string' ? res : JSON.stringify(res)
                     });
+                    const screenshotMessage = browserScreenshotMessage(res, this.config);
+                    if (screenshotMessage) browserScreenshotMessages.push(screenshotMessage);
                 }
+                this.messages.push(...browserScreenshotMessages);
 
                 if (!this.config.isApiMode) {
                     spinner = ora({ text: 'Processing tool results...', color: 'yellow', stream: process.stdout }).start();

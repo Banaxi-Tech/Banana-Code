@@ -19,9 +19,129 @@ import { delegateTask } from './delegateTask.js';
 import { bananasplitReview } from './bananasplitReview.js';
 import { renameFile } from './renameFile.js';
 import { generateImage } from './imageGen.js';
+import {
+    browserOpen,
+    browserSnapshot,
+    browserClick,
+    browserType,
+    browserPress,
+    browserScroll,
+    browserBack,
+    browserForward,
+    browserReload,
+    browserClose
+} from './browserUse.js';
 import { mcpManager } from '../utils/mcp.js';
 import { saveMemoryTool, listMemoryTool, deleteMemoryTool, saveProjectMemoryTool, listProjectMemoryTool, deleteProjectMemoryTool } from './memoryTools.js';
 import { pluginRegistry } from '../utils/plugins.js';
+
+const BROWSER_TOOLS = [
+    {
+        name: 'browser_open',
+        label: 'Browser Open',
+        description: 'Open a HTTP or HTTPS URL in the visible Banana Code Studio browser and return a page observation.',
+        browserUse: true,
+        parameters: {
+            type: 'object',
+            properties: {
+                url: { type: 'string', description: 'Absolute HTTP or HTTPS URL to open.' }
+            },
+            required: ['url']
+        }
+    },
+    {
+        name: 'browser_snapshot',
+        label: 'Browser Snapshot',
+        description: 'Inspect the current visible browser page. Returns URL, title, visible text, viewport, screenshot metadata, and clickable/typeable element refs.',
+        browserUse: true,
+        parameters: {
+            type: 'object',
+            properties: {},
+            required: []
+        }
+    },
+    {
+        name: 'browser_click',
+        label: 'Browser Click',
+        description: 'Click an element in the visible browser. Prefer a ref from browser_snapshot; use x/y viewport coordinates only if no ref is available.',
+        browserUse: true,
+        parameters: {
+            type: 'object',
+            properties: {
+                ref: { type: 'string', description: 'Element ref returned by browser_snapshot.' },
+                x: { type: 'number', description: 'Viewport x coordinate fallback.' },
+                y: { type: 'number', description: 'Viewport y coordinate fallback.' }
+            }
+        }
+    },
+    {
+        name: 'browser_type',
+        label: 'Browser Type',
+        description: 'Type text into the currently focused browser element.',
+        browserUse: true,
+        parameters: {
+            type: 'object',
+            properties: {
+                text: { type: 'string', description: 'Text to type.' }
+            },
+            required: ['text']
+        }
+    },
+    {
+        name: 'browser_press',
+        label: 'Browser Press',
+        description: 'Press a keyboard key in the browser, such as Enter, Tab, Escape, ArrowDown, Backspace, or a single character.',
+        browserUse: true,
+        parameters: {
+            type: 'object',
+            properties: {
+                key: { type: 'string', description: 'Key name to press.' }
+            },
+            required: ['key']
+        }
+    },
+    {
+        name: 'browser_scroll',
+        label: 'Browser Scroll',
+        description: 'Scroll the visible browser page by viewport deltas.',
+        browserUse: true,
+        parameters: {
+            type: 'object',
+            properties: {
+                deltaX: { type: 'number', description: 'Horizontal scroll delta. Defaults to 0.' },
+                deltaY: { type: 'number', description: 'Vertical scroll delta. Positive scrolls down. Defaults to 600.' }
+            }
+        }
+    },
+    {
+        name: 'browser_back',
+        label: 'Browser Back',
+        description: 'Navigate the visible browser back.',
+        browserUse: true,
+        parameters: { type: 'object', properties: {}, required: [] }
+    },
+    {
+        name: 'browser_forward',
+        label: 'Browser Forward',
+        description: 'Navigate the visible browser forward.',
+        browserUse: true,
+        parameters: { type: 'object', properties: {}, required: [] }
+    },
+    {
+        name: 'browser_reload',
+        label: 'Browser Reload',
+        description: 'Reload the visible browser page.',
+        browserUse: true,
+        parameters: { type: 'object', properties: {}, required: [] }
+    },
+    {
+        name: 'browser_close',
+        label: 'Browser Close',
+        description: 'Close the visible Banana Code Studio browser panel.',
+        browserUse: true,
+        parameters: { type: 'object', properties: {}, required: [] }
+    }
+];
 
 export const TOOLS = [
     {
@@ -386,7 +506,13 @@ export const TOOLS = [
 ];
 
 export function getAvailableTools(config = {}) {
-    let available = TOOLS.filter(tool => {
+    const browserUseAvailable = config.isApiMode === true
+        && config.browserUse?.enabled !== false
+        && config.browserController?.available === true;
+    const toolDefinitions = browserUseAvailable ? TOOLS.concat(BROWSER_TOOLS) : TOOLS;
+
+    let available = toolDefinitions.filter(tool => {
+        if (tool.browserUse && !browserUseAvailable) return false;
         if (tool.name === 'bananasplit_review' && config.bananaSplit?.enabled !== true) return false;
         if (tool.name === 'generate_image' && config.imageGen?.enabled !== true) return false;
         if (config.bananaSplitReviewerMode) {
@@ -509,6 +635,16 @@ export async function executeTool(name, args, config) {
         case 'delete_project_memory': return await deleteProjectMemoryTool(args);
         case 'rename_file': return await renameFile(args);
         case 'generate_image': return await generateImage(args, config);
+        case 'browser_open': return await browserOpen(args, config);
+        case 'browser_snapshot': return await browserSnapshot(args, config);
+        case 'browser_click': return await browserClick(args, config);
+        case 'browser_type': return await browserType(args, config);
+        case 'browser_press': return await browserPress(args, config);
+        case 'browser_scroll': return await browserScroll(args, config);
+        case 'browser_back': return await browserBack(args, config);
+        case 'browser_forward': return await browserForward(args, config);
+        case 'browser_reload': return await browserReload(args, config);
+        case 'browser_close': return await browserClose(args, config);
         default: return `Unknown tool: ${name}`;
     }
 }

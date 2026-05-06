@@ -17,6 +17,7 @@ import { getSessionPermissions, setYoloMode } from './permissions.js';
 import { getContextBreakdown } from './utils/tokens.js';
 import { TOOLS } from './tools/registry.js';
 import { mcpManager } from './utils/mcp.js';
+import { BrowserBridge } from './utils/browserBridge.js';
 import { extractUltrathinkDirective, isUltrathinkMention, providerSupportsUltrathink } from './utils/ultrathink.js';
 import { GROQ_WHISPER_MODELS, getVoiceConfig, mimeTypeFromFileName, transcribeWithGroq } from './voice.js';
 
@@ -29,6 +30,7 @@ const PROVIDER_REINIT_KEYS = new Set([
     'useMemory',
     'bananaSplit',
     'imageGen',
+    'browserUse',
     'planMode',
     'askMode',
     'securityMode',
@@ -94,6 +96,14 @@ function createProviderForConfig(createProvider, config) {
     return createProvider(getBananaSplitLocalConfig(config));
 }
 
+function providerHasBrowserTools(providerInstance) {
+    if (!Array.isArray(providerInstance?.tools)) return false;
+    return providerInstance.tools.some(tool => {
+        return tool?.name === 'browser_open'
+            || tool?.function?.name === 'browser_open';
+    });
+}
+
 async function refreshSystemPrompt(providerInstance, config) {
     if (providerInstance && typeof providerInstance.updateSystemPrompt === 'function') {
         const { getSystemPrompt } = await import('./prompt.js');
@@ -147,13 +157,80 @@ function extractInlineAttachmentMentions(text = '') {
     return mentions;
 }
 
-async function prepareChatInput(text = '', attachments = [], workspace = process.cwd()) {
+function formatBrowserElementContext(browserElements = [], workspace = process.cwd()) {
+    if (!Array.isArray(browserElements) || browserElements.length === 0) return '';
+
+    const sections = browserElements.map((element, index) => {
+        const ancestry = Array.isArray(element?.ancestry)
+            ? JSON.stringify(element.ancestry, null, 2)
+            : '[]';
+        const sourceHints = Array.isArray(element?.sourceHints)
+            ? JSON.stringify(element.sourceHints, null, 2)
+            : '[]';
+        const attributes = element?.attributes && typeof element.attributes === 'object'
+            ? JSON.stringify(element.attributes, null, 2)
+            : '{}';
+        const computed = element?.computed && typeof element.computed === 'object'
+            ? JSON.stringify(element.computed, null, 2)
+            : '{}';
+        const rect = element?.rect && typeof element.rect === 'object'
+            ? JSON.stringify(element.rect)
+            : '{}';
+        return `--- Browser Element ${index + 1} ---
+Page URL: ${element?.url || ''}
+Page title: ${element?.title || ''}
+Tag: ${element?.tag || ''}
+Role: ${element?.role || ''}
+Selector: ${element?.selector || ''}
+XPath: ${element?.xpath || ''}
+Element id: ${element?.id || ''}
+Class: ${element?.className || ''}
+ARIA label: ${element?.ariaLabel || ''}
+Viewport rect: ${rect}
+Visible text:
+${element?.text || ''}
+
+Input/value text:
+${element?.value || ''}
+
+Attributes:
+${attributes}
+
+DOM ancestry:
+${ancestry}
+
+Framework/source hints:
+${sourceHints}
+
+Computed style excerpt:
+${computed}
+
+Outer HTML:
+${element?.outerHTML || ''}
+
+Parent HTML:
+${element?.parentHTML || ''}
+--- End Browser Element ${index + 1} ---`;
+    }).join('\n\n');
+
+    return `\n\n--- Browser Element Context ---
+The user selected the following exact element(s) in the visible Studio browser using "Edit using AI".
+Current local workspace: ${workspace}
+
+Use this DOM context to identify the corresponding local source files when the workspace contains the website/app code. Search the local project for matching text, selectors, ids, classes, or component structure, then make the requested local code changes with file-editing tools. If the current workspace does not contain the source code for this page, explain that you cannot edit it locally and say what code/project would be needed.
+
+${sections}
+--- End Browser Element Context ---`;
+}
+
+async function prepareChatInput(text = '', attachments = [], workspace = process.cwd(), browserElements = []) {
     const seenPaths = new Set();
-    let promptText = String(text || '');
+    const originalPromptText = String(text || '');
+    let promptText = originalPromptText + formatBrowserElementContext(browserElements, workspace);
     const images = [];
     const dropped = [];
     const requestedPaths = [
-        ...extractInlineAttachmentMentions(promptText),
+        ...extractInlineAttachmentMentions(originalPromptText),
         ...attachments.map(attachment => typeof attachment === 'string' ? attachment : attachment?.path).filter(Boolean)
     ];
 
@@ -413,6 +490,21 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
         const activeTickets = new Set();
         let currentWorkspace = process.cwd();
         let currentSessionId = null;
+        const browserBridge = new BrowserBridge(ws);
+
+        const getApiRuntimeConfig = () => ({
+            ...config,
+            isApiMode: true,
+            browserController: browserBridge
+        });
+
+        const shouldRecreateProviderForBrowser = () => {
+            if (!providerInstance) return false;
+            const hadBrowser = providerHasBrowserTools(providerInstance);
+            const hasBrowser = browserBridge.available === true
+                && config.browserUse?.enabled !== false;
+            return hadBrowser !== hasBrowser;
+        };
 
         // Setup session-scoped permission handler for API mode
         const sessionPermissionHandler = (ticketId, actionType, details) => {
@@ -452,9 +544,15 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
         };
 
         ws.on('message', async (message) => {
-            console.log(chalk.gray(`[API] Received message: ${message}`));
             try {
                 const data = JSON.parse(message);
+                if (data.type === 'browser_response') {
+                    console.log(chalk.gray(`[API] Received message: browser_response ${data.requestId} ok=${data.ok}`));
+                } else if (data.type === 'browser_state') {
+                    console.log(chalk.gray(`[API] Received message: browser_state`));
+                } else {
+                    console.log(chalk.gray(`[API] Received message: ${message}`));
+                }
                 
                 if (!isAuthenticated) {
                     if (data.type === 'auth' && data.token === apiToken) {
@@ -483,6 +581,29 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                     return;
                 }
 
+                if (data.type === 'browser_bridge_ready') {
+                    browserBridge.markReady();
+                    if (shouldRecreateProviderForBrowser()) {
+                        const previousConfig = providerInstance.config || config;
+                        providerInstance = reinitializeProviderPreservingHistory(providerInstance, createProvider, previousConfig, getApiRuntimeConfig());
+                        await refreshSystemPrompt(providerInstance, getApiRuntimeConfig());
+                    }
+                    console.log(chalk.cyan(`[API] Studio browser bridge ready.`));
+                    return;
+                }
+
+                if (data.type === 'browser_response') {
+                    if (!browserBridge.handleResponse(data)) {
+                        console.log(chalk.yellow(`[API] Ignored browser response for unknown request: ${data.requestId}`));
+                    }
+                    return;
+                }
+
+                if (data.type === 'browser_state') {
+                    browserBridge.updateState(data.state || data);
+                    return;
+                }
+
                 if (data.type === 'set_workspace') {
                     const newPath = path.resolve(data.path);
                     try {
@@ -494,7 +615,7 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                         
                         // Force provider re-init if it exists to pick up new workspace context
                         if (providerInstance) {
-                            providerInstance = createProviderForConfig(createProvider, config);
+                            providerInstance = createProviderForConfig(createProvider, getApiRuntimeConfig());
                         }
                     } catch (err) {
                         ws.send(JSON.stringify({ type: 'error', message: `Invalid workspace path: ${err.message}` }));
@@ -519,13 +640,13 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                     }
 
                     if (providerInstance && shouldReinitializeProvider(data.config)) {
-                        providerInstance = reinitializeProviderPreservingHistory(providerInstance, createProvider, previousConfig, config);
+                        providerInstance = reinitializeProviderPreservingHistory(providerInstance, createProvider, previousConfig, getApiRuntimeConfig());
                     } else if (providerInstance) {
-                        providerInstance.config = { ...providerInstance.config, ...data.config };
+                        providerInstance.config = { ...providerInstance.config, ...getApiRuntimeConfig(), ...data.config };
                     }
 
                     // Always refresh the system prompt to reflect potential style/emoji/mode changes
-                    await refreshSystemPrompt(providerInstance, config);
+                    await refreshSystemPrompt(providerInstance, getApiRuntimeConfig());
 
                     if (data.save) {
                         await saveConfig(config);
@@ -595,8 +716,8 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                     config = { ...config, betaTools: nextBetaTools };
                     global.bananaConfig = config;
                     if (providerInstance) {
-                        providerInstance = reinitializeProviderPreservingHistory(providerInstance, createProvider, previousConfig, config);
-                        await refreshSystemPrompt(providerInstance, config);
+                        providerInstance = reinitializeProviderPreservingHistory(providerInstance, createProvider, previousConfig, getApiRuntimeConfig());
+                        await refreshSystemPrompt(providerInstance, getApiRuntimeConfig());
                     }
                     await saveConfig(config);
                     ws.send(JSON.stringify({ type: 'config_updated', config }));
@@ -611,8 +732,8 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                     };
                     global.bananaConfig = config;
                     if (providerInstance) {
-                        providerInstance = reinitializeProviderPreservingHistory(providerInstance, createProvider, previousConfig, config);
-                        await refreshSystemPrompt(providerInstance, config);
+                        providerInstance = reinitializeProviderPreservingHistory(providerInstance, createProvider, previousConfig, getApiRuntimeConfig());
+                        await refreshSystemPrompt(providerInstance, getApiRuntimeConfig());
                     }
                     await saveConfig(config);
                     ws.send(JSON.stringify({ type: 'config_updated', config }));
@@ -638,8 +759,8 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                     };
                     global.bananaConfig = config;
                     if (providerInstance) {
-                        providerInstance = reinitializeProviderPreservingHistory(providerInstance, createProvider, previousConfig, config);
-                        await refreshSystemPrompt(providerInstance, config);
+                        providerInstance = reinitializeProviderPreservingHistory(providerInstance, createProvider, previousConfig, getApiRuntimeConfig());
+                        await refreshSystemPrompt(providerInstance, getApiRuntimeConfig());
                     }
                     await saveConfig(config);
                     ws.send(JSON.stringify({ type: 'config_updated', config }));
@@ -671,7 +792,7 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                     config.provider = session.provider || config.provider;
                     config.model = session.model || config.model;
                     
-                    providerInstance = createProviderForConfig(createProvider, config);
+                    providerInstance = createProviderForConfig(createProvider, getApiRuntimeConfig());
                     providerInstance.messages = session.messages || [];
                     currentSessionId = data.sessionId;
                     
@@ -743,7 +864,7 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                         console.log(chalk.green(`[API] Successfully created BANANA.md!`));
 
                         // Re-init current provider so it picks up the new BANANA.md
-                        providerInstance = createProviderForConfig(createProvider, config);
+                        providerInstance = createProviderForConfig(createProvider, getApiRuntimeConfig());
                         
                         ws.send(JSON.stringify({ type: 'init_complete', summary }));
                     } catch (err) {
@@ -844,12 +965,18 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                     let effectiveUserText = originalUserText;
                     let ultrathinkEnabled = false;
 
-                    if (!providerInstance) {
-                        console.log(chalk.gray(`[API] Creating provider instance...`));
-                        providerInstance = createProviderForConfig(createProvider, config);
+                    if (shouldRecreateProviderForBrowser()) {
+                        const previousConfig = providerInstance.config || config;
+                        providerInstance = reinitializeProviderPreservingHistory(providerInstance, createProvider, previousConfig, getApiRuntimeConfig());
+                        await refreshSystemPrompt(providerInstance, getApiRuntimeConfig());
                     }
 
-                    const activeProviderConfig = getBananaSplitLocalConfig(config);
+                    if (!providerInstance) {
+                        console.log(chalk.gray(`[API] Creating provider instance...`));
+                        providerInstance = createProviderForConfig(createProvider, getApiRuntimeConfig());
+                    }
+
+                    const activeProviderConfig = getBananaSplitLocalConfig(getApiRuntimeConfig());
                     const ultrathinkDirective = extractUltrathinkDirective(effectiveUserText);
                     if (ultrathinkDirective.enabled) {
                         effectiveUserText = ultrathinkDirective.text;
@@ -859,7 +986,10 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                     }
 
                     // Attach a temporary listener for this specific request
-                    providerInstance.config.isApiMode = true;
+                    providerInstance.config = {
+                        ...providerInstance.config,
+                        ...getApiRuntimeConfig()
+                    };
                     providerInstance.onChunk = (chunk) => {
                         if (ws.readyState === ws.OPEN) {
                             ws.send(JSON.stringify({ type: 'chunk', content: chunk }));
@@ -891,7 +1021,7 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                     };
 
                     console.log(chalk.gray(`[API] Sending message to AI...`));
-                    const preparedInput = await prepareChatInput(effectiveUserText, data.attachments || [], currentWorkspace);
+                    const preparedInput = await prepareChatInput(effectiveUserText, data.attachments || [], currentWorkspace, data.browserElements || []);
                     if (preparedInput.dropped.length > 0 && ws.readyState === ws.OPEN) {
                         ws.send(JSON.stringify({
                             type: 'attachments_dropped',
@@ -908,7 +1038,7 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                     
                     // Save the session to disk
                     if (!currentSessionId) currentSessionId = generateSessionId();
-                    const titleSource = originalUserText.trim() || (preparedInput.images.length > 0 ? 'Image attachment' : 'File attachment');
+                    const titleSource = originalUserText.trim() || (Array.isArray(data.browserElements) && data.browserElements.length > 0 ? 'Browser element edit' : (preparedInput.images.length > 0 ? 'Image attachment' : 'File attachment'));
                     
                     await saveSession(currentSessionId, {
                         messages: providerInstance.messages,
@@ -940,6 +1070,7 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
         });
 
         ws.on('close', () => {
+            browserBridge.closeAll('Studio browser disconnected.');
             console.log(chalk.gray(`[API] GUI Client disconnected`));
         });
 

@@ -80,7 +80,16 @@ function markProjectLocalConfig(config, globalConfig, localSettings) {
 }
 
 function getPersistentConfig(config) {
-    const { isApiMode, onChunk, onToolStart, onToolEnd, onImageGenProgress, onImageGenResult, ...persistentConfig } = config;
+    const {
+        isApiMode,
+        onChunk,
+        onToolStart,
+        onToolEnd,
+        onImageGenProgress,
+        onImageGenResult,
+        browserController,
+        ...persistentConfig
+    } = config;
     const metadata = config[PROJECT_LOCAL_CONFIG_METADATA];
 
     if (!metadata) {

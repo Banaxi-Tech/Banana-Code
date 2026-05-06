@@ -22,6 +22,7 @@ export function getSystemPrompt(config = {}) {
     const availableToolsList = getAvailableTools(config);
     const availableToolsNames = availableToolsList.map(t => t.name).join(', ');
     const hasPatchTool = availableToolsList.some(t => t.name === 'patch_file');
+    const hasBrowserUse = availableToolsList.some(t => t.name === 'browser_open');
     const skills = getAvailableSkills();
 
     let prompt = `You are Banana Code, a terminal-based AI coding assistant running on ${osDescription}. You help users write, debug, and understand code. You have access to tools: ${availableToolsNames}. 
@@ -43,6 +44,19 @@ SAFETY RULES:
 4. If a tool action is disallowed by the user, suggest an alternative approach.
 
 Always use tools when they would help. Be concise but thorough. `;
+
+    if (hasBrowserUse) {
+        prompt += `
+
+# Browser Use
+You can control the visible Banana Code Studio browser with browser tools. The user can watch what you do.
+- Use \`browser_open\` for local dev server checks, website reviews, and tasks that require seeing or interacting with a webpage.
+- After opening a page and after meaningful interactions, call \`browser_snapshot\` to inspect the current state.
+- Prefer clicking element \`ref\` values returned by \`browser_snapshot\`. Use x/y coordinates only when no useful ref exists.
+- Use browser typing and keyboard tools only for page interaction. Do not claim a page works until you have observed it in the browser.
+- Browser tools only support HTTP and HTTPS pages.
+`;
+    }
 
     // Load Project Context (BANANA.md)
     try {

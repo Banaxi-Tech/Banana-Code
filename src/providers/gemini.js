@@ -24,6 +24,17 @@ const GEMINI_AUTO_FREE_TIER_MODEL_IDS = new Set([
     'gemini-3.1-flash-lite-preview'
 ]);
 
+function browserScreenshotPart(toolResult) {
+    const screenshot = toolResult?.__browserScreenshot;
+    if (!screenshot?.base64 || !screenshot?.mimeType) return null;
+    return {
+        inlineData: {
+            mimeType: screenshot.mimeType,
+            data: screenshot.base64
+        }
+    };
+}
+
 export class GeminiProvider {
     constructor(config) {
         this.config = config;
@@ -314,6 +325,11 @@ export class GeminiProvider {
                                 response: { result: res }
                             }
                         });
+                        const screenshotPart = browserScreenshotPart(res);
+                        if (screenshotPart) {
+                            toolResults.push({ text: 'Browser screenshot for the latest observation:' });
+                            toolResults.push(screenshotPart);
+                        }
                     }
                 }
 
