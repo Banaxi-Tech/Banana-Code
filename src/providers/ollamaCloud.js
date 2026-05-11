@@ -10,6 +10,7 @@ import { printMarkdown } from '../utils/markdown.js';
 import { OLLAMA_CLOUD_MODELS } from '../constants.js';
 import { AUTO_MODEL_DESCRIPTIONS, AUTO_ROUTER_MODELS, buildRoutingPrompt, parseRoutingResponse, openAIMessagesToAutoRouterHistory } from '../utils/autoModel.js';
 import { sendRemoteAiSegment } from '../remote.js';
+import { getActiveModelForNextRequest } from '../utils/modelSwitch.js';
 
 export class OllamaCloudProvider {
     constructor(config) {
@@ -100,6 +101,7 @@ export class OllamaCloudProvider {
 
         try {
             while (true) {
+                activeModel = getActiveModelForNextRequest(this, activeModel);
                 const response = await fetch(this.URL, {
                     method: 'POST',
                     headers: { 

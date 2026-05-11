@@ -41,6 +41,21 @@ export async function loadSession(uuid) {
     return JSON.parse(data);
 }
 
+export async function deleteSession(uuid) {
+    if (typeof uuid !== 'string' || !uuid.trim() || uuid.includes('/') || uuid.includes('\\')) {
+        throw new Error('Invalid session id');
+    }
+
+    const filePath = path.join(CHATS_DIR, `${uuid}.json`);
+    try {
+        await fs.unlink(filePath);
+        return true;
+    } catch (err) {
+        if (err?.code === 'ENOENT') return false;
+        throw err;
+    }
+}
+
 export async function listSessions() {
     await ensureChatsDir();
     const files = await fs.readdir(CHATS_DIR);

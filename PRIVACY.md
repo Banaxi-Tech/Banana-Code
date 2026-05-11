@@ -1,6 +1,8 @@
 # 🍌 Banana Code Privacy Policy
 
-**Last updated: April 30, 2026**
+**Last updated: May 11, 2026**
+
+**Updated Privacy Policy:** This update reflects Banana Code Remote phone-to-CLI chat and optional image attachments.
 
 ## 1. Overview
 
@@ -31,7 +33,7 @@ Banana Code reads your local files when you use `@file` mentions, `write_file`, 
 
 ## 3. Banana Code Remote (Android App) — Data Collected
 
-Banana Code Remote is an optional companion Android app that lets you monitor your CLI session and approve tool calls remotely. When you use it, the following data flows through our relay server at `bananacode.sh`:
+Banana Code Remote is an optional companion Android app that lets you send messages to your CLI session, monitor responses, and approve tool calls remotely. When you use it, the following data flows through our relay server at `bananacode.sh`:
 
 ### 3.1 Account Credentials
 
@@ -48,9 +50,13 @@ After registering or logging in (app) and after redeeming a pairing code (CLI), 
 
 These tokens are stored as SHA-256 hashes in our database. The plain-text token is only ever held on your device. Tokens are used to authenticate all API calls and Socket.IO connections. You can revoke tokens by logging out (app) or disconnecting (`/remotetooling disconnect` in the CLI).
 
-### 3.2 AI Messages
+### 3.2 Remote Chat Messages, Image Attachments, and AI Messages
 
-When Banana Remote is paired, the text of AI responses from your CLI session is relayed through our server to your phone. These messages are temporarily stored in our database to support message history. They contain only the AI-generated text, not your prompts or file contents.
+When you send a message from Banana Code Remote on your phone, the message text is relayed through our server to your paired CLI. The message text may be stored in our database to support remote message history and delivery status.
+
+If you attach images from the phone app, the app compresses them before sending. Image bytes are relayed through our server to your paired CLI for the current message only. We do **not** store phone image bytes in remote message history; only image-count metadata or a marker such as "[1 image attachment]" may be stored.
+
+When Banana Remote is paired, the text of AI responses from your CLI session is relayed through our server to your phone. These messages are temporarily stored in our database to support message history. These AI-response records contain the AI-generated text. Phone-originated prompts are covered above, and local CLI prompts or file contents are not stored as AI-response records.
 
 ### 3.3 Tool Call Requests
 
@@ -81,13 +87,13 @@ Short-lived alphanumeric pairing codes (used to link your CLI to your phone) are
 
 ## 5. Data Retention
 
-- Tool requests and messages are stored for session debugging purposes. There is currently no automatic deletion schedule. You may request deletion at any time.
+- Tool requests and text messages are stored for session debugging and remote message history. Phone image bytes are forwarded transiently and are not stored in message history. There is currently no automatic deletion schedule for stored text/tool data. You may request deletion at any time.
 - Pairing codes are automatically deleted after use or after 5 minutes.
 - The installation ping counter only stores an aggregate number — no per-request history is kept.
 
 ## 6. Third-Party AI Providers
 
-When you use Banana Code, your prompts and file contents are sent directly to the AI provider you configured (Google, Anthropic, OpenAI, Mistral, DeepSeek, Kimi AI, etc.). Their own privacy policies govern how they handle this data. Banana Code does not intermediate or receive copies of these messages.
+When you use Banana Code, your prompts, file contents, and any image attachments you provide are sent to the AI provider you configured (Google, Anthropic, OpenAI, Mistral, DeepSeek, Kimi AI, etc.) so the model can answer. Their own privacy policies govern how they handle this data. For local CLI messages, Banana Code does not intermediate or receive copies of these provider requests. For phone-originated Banana Remote messages, the prompt text and transient image bytes pass through `bananacode.sh` only to reach your paired CLI.
 
 ## 7. Children's Privacy
 

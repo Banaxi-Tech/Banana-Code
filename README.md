@@ -58,6 +58,7 @@ While tools like Cursor provide great GUI experiences, Banana Code is built for 
 
 - **Multi-Provider Support**: Switch between **Google Gemini**, **Anthropic Claude**, **OpenAI** (API key or ChatGPT / Codex OAuth), **Mistral AI**, **DeepSeek** (V4 Flash and V4 Pro), **Kimi AI** (K2.6 and K2.5), **OpenRouter** (any model ID; see [OpenRouter setup](#openrouter-setup)), **Ollama Cloud**, and **Ollama (Local)** effortlessly.
 - **Auto Mode**: For most providers, pick **Auto Mode** as your model — a small “router” model reads your prompt and chooses which model **and reasoning effort** to use for that turn.
+- **Model Switch Tool**: On supported providers, the AI can recommend switching models mid-conversation and Banana Code asks before applying it. OpenRouter, local Ollama, and local LM Studio are excluded.
 - **Interactive Terminal Suite**: Move beyond one-shot commands. The AI can now spawn persistent terminal sessions to handle interactive prompts like `npm init`, `git commit` (with editors), or Y/N confirmations in real-time.
 - **Financial Intelligence**: Track your exact API spend and savings. Banana Code uses server-side usage data to show you session costs and how much you've saved via **Prompt Caching**.
 - **Model Context Protocol (MCP)**: Connect Banana Code to any community-built MCP server (like SQLite, GitHub, Google Maps) to give your AI infinite new superpowers via `/beta`.
@@ -160,6 +161,8 @@ While in a chat, use these special commands (type `/help` for the full list):
 
 ### ⚡ Auto Mode
 When **Auto Mode** is selected as the model (`/model` or initial setup), each new user message is first sent to a **small, fast router model** (per provider) together with the **last seven conversation messages** (formatted as context only). The router returns JSON: which concrete model should handle **this** turn and a short reason—so short follow-ups like “Implement it” can pick a capable model when the history shows a large task. The assistant’s reply then uses that model. If routing fails, providers fall back to a sensible default (e.g. Gemini may fall back to **Gemini 3 Flash**). **OpenRouter** and **local Ollama** do not offer Auto Mode (fixed model ID vs. local tag list).
+
+Supported providers also expose a `request_model_switch` tool. The AI can call it when the current model is clearly overpowered, underpowered, too slow, or too expensive for the task. Banana Code then asks whether to use the recommended model for the rest of the current turn or continue with the current model. Future messages return to the configured model unless another switch is approved. This is available for Gemini, Claude, OpenAI, Mistral, DeepSeek, Kimi, and Ollama Cloud; it is disabled for OpenRouter, local Ollama, and local LM Studio.
 
 ### Kimi AI setup
 
@@ -589,12 +592,14 @@ All errors follow a consistent format:
 
 ## 📱 Banana Code Remote (Android App)
 
-Banana Code Remote is a companion Android app that lets you monitor your CLI session and approve or deny AI tool calls from your phone — in real time, from anywhere.
+Banana Code Remote is a companion Android app that lets you chat with your CLI session, monitor responses, and approve or deny AI tool calls from your phone — in real time, from anywhere.
 
 **[Download the APK →](https://drive.usercontent.google.com/download?id=1hzZ5I354hH1m3pOI_2N6hSMmzfV3CRPM&export=download&authuser=0&confirm=t&uuid=4f8125c7-91d2-4226-98b1-56f21ce6b17c&at=ALBwUgmSzSWDvxiIFLX8f0ogcFBH%3A1777466936495)**  
 Requires Android 10+ (API 29). Sideloading required (not on Play Store yet).
 
 ### Features
+- **Phone-to-CLI Chat** — Send prompts from your phone and see the same turn appear in the active CLI terminal.
+- **Image Attachments** — Attach up to 4 compressed images when the active provider supports image input.
 - **Live AI Feed** — Complete AI responses stream to your phone with full Markdown rendering (headings, bold, inline code, fenced code blocks with diff highlighting, tables).
 - **Push Notifications** — Get notified when the AI needs permission to run a command, write a file, or apply a patch.
 - **Approve / Deny with one tap** — From the notification shade or from inside the app.
@@ -613,7 +618,7 @@ Requires Android 10+ (API 29). Sideloading required (not on Play Store yet).
 ```
 Enter the pairing code. Once connected, you'll see "Mobile App connected!" in the CLI.
 
-**4. You're live.** AI messages stream to your phone, and tool approval notifications will arrive when the agent needs to take an action.
+**4. You're live.** You can send messages from the phone or CLI. AI messages stream to your phone, and tool approval notifications will arrive when the agent needs to take an action.
 
 ### Disconnecting
 
@@ -625,7 +630,7 @@ Closes the socket, clears the saved pairing UUID from config, and immediately re
 
 ### Privacy
 
-When Banana Remote is active, AI message text, tool call details (including command strings and code diffs), and approval decisions are relayed through our server at `bananacode.sh` over TLS. Messages are signed with HMAC-SHA256. Your prompts and full file contents are **not** relayed — only the AI's final responses and the details of specific tool calls.
+When Banana Remote is active, phone-originated prompts, transient phone image attachments, AI message text, tool call details (including command strings and code diffs), and approval decisions are relayed through our server at `bananacode.sh` over TLS. Image bytes are forwarded to the paired CLI for the current message and are not stored in remote message history; the history keeps text plus image-count metadata.
 
 See the full [Privacy Policy](https://bananacode.sh/privacy-policy.html) for what is collected and how long it is retained.
 

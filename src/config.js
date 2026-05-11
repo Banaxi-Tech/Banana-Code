@@ -88,6 +88,8 @@ function getPersistentConfig(config) {
         onImageGenProgress,
         onImageGenResult,
         browserController,
+        requestModelSwitch,
+        runtimeModelOverride,
         ...persistentConfig
     } = config;
     const metadata = config[PROJECT_LOCAL_CONFIG_METADATA];
@@ -611,9 +613,15 @@ export async function setupProvider(provider, config = {}) {
 
                 const supported = found.supported_parameters || [];
                 const hasToolCalling = supported.includes('tools') || supported.includes('tool_choice');
+                const inputModalities = found.architecture?.input_modalities || [];
+                const hasImageInput = inputModalities.includes('image');
 
                 if (hasToolCalling) {
-                    console.log(chalk.green(`✔ "${modelId}" supports tool calling. Good to go!`));
+                    const imageStatus = hasImageInput ? ' and image input' : '';
+                    console.log(chalk.green(`✔ "${modelId}" supports tool calling${imageStatus}. Good to go!`));
+                    if (!hasImageInput) {
+                        console.log(chalk.yellow(`   Note: OpenRouter does not list image input for this model.`));
+                    }
                     config.model = modelId.trim();
                     modelAccepted = true;
                 } else {

@@ -12,6 +12,7 @@ import { OPENAI_MODELS, CODEX_MODELS } from '../constants.js';
 import { AUTO_MODEL_DESCRIPTIONS, AUTO_ROUTER_MODELS, buildRoutingPrompt, parseRoutingResponse, openAIMessagesToAutoRouterHistory } from '../utils/autoModel.js';
 import { sendRemoteAiSegment } from '../remote.js';
 import { extractUltrathinkDirective } from '../utils/ultrathink.js';
+import { getActiveModelForNextRequest } from '../utils/modelSwitch.js';
 
 const CODEX_REASONING_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
 
@@ -285,6 +286,7 @@ export class OpenAIProvider {
             while (true) {
                 let stream = null;
                 try {
+                    activeModel = getActiveModelForNextRequest(this, activeModel);
                     const params = {
                         model: activeModel,
                         messages: this.messages,
@@ -555,6 +557,7 @@ export class OpenAIProvider {
             this.repairDanglingToolCalls();
 
             while (true) {
+                activeOauthModel = getActiveModelForNextRequest(this, activeOauthModel);
                 const backendInput = mapMessagesToBackend(this.messages);
                 if (this.config.debug) {
                     console.error(chalk.gray(`[DEBUG] Backend input (${backendInput.length} items): ${JSON.stringify(backendInput, null, 2)}`));

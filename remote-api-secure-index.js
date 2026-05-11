@@ -13,16 +13,22 @@ if (!globalThis.crypto) {
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '12mb' }));
 
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: { origin: '*', methods: ['GET', 'POST'] }
+  cors: { origin: '*', methods: ['GET', 'POST'] },
+  maxHttpBufferSize: 12 * 1024 * 1024
 });
 
 const PAIRING_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const PAIRING_CODE_LENGTH = 8;
 const PAIRING_TTL_MS = 5 * 60 * 1000;
+const MAX_USER_MESSAGE_TEXT_LENGTH = 32000;
+const MAX_REMOTE_IMAGES = 4;
+const MAX_REMOTE_IMAGE_BYTES = 2 * 1024 * 1024;
+const MAX_REMOTE_TOTAL_IMAGE_BYTES = 8 * 1024 * 1024;
+const REMOTE_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 const rateLimits = new Map();
 
 let db;
@@ -242,6 +248,94 @@ function generatePairingCode() {
   return code;
 }
 
+function roleRoom(accountUuid, role) {
+  return `${accountUuid}:${role}`;
+}
+
+function decodedBase64Bytes(base64) {
+  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+  return Math.floor((base64.length * 3) / 4) - padding;
+}
+
+function normalizeRemoteImage(image, index) {
+  if (!image || typeof image !== 'object') {
+    throw new Error(`Image ${index + 1} is invalid.`);
+  }
+
+  const mimeType = String(image.mimeType || image.mediaType || '').toLowerCase();
+  const base64 = typeof image.base64 === 'string' ? image.base64.trim() : '';
+
+  if (!REMOTE_IMAGE_MIME_TYPES.has(mimeType)) {
+    throw new Error(`Image ${index + 1} has an unsupported type.`);
+  }
+  if (!base64) {
+    throw new Error(`Image ${index + 1} is empty.`);
+  }
+
+  const byteLength = decodedBase64Bytes(base64);
+  if (!Number.isFinite(byteLength) || byteLength <= 0) {
+    throw new Error(`Image ${index + 1} is not valid base64.`);
+  }
+  if (byteLength > MAX_REMOTE_IMAGE_BYTES) {
+    throw new Error(`Image ${index + 1} is larger than 2 MB.`);
+  }
+
+  return { base64, mimeType, byteLength };
+}
+
+function normalizeUserMessagePayload(data) {
+  if (!data || typeof data !== 'object') {
+    throw new Error('Message payload is required.');
+  }
+
+  const id = typeof data.id === 'string' ? data.id.trim() : '';
+  const text = typeof data.text === 'string' ? data.text : '';
+  const rawImages = Array.isArray(data.images) ? data.images : [];
+
+  if (!id || id.length > 128) {
+    throw new Error('Message id is required.');
+  }
+  if (text.length > MAX_USER_MESSAGE_TEXT_LENGTH) {
+    throw new Error('Message text is too long.');
+  }
+  if (rawImages.length > MAX_REMOTE_IMAGES) {
+    throw new Error(`At most ${MAX_REMOTE_IMAGES} images can be attached.`);
+  }
+
+  const images = rawImages.map(normalizeRemoteImage);
+  const totalImageBytes = images.reduce((sum, image) => sum + image.byteLength, 0);
+  if (totalImageBytes > MAX_REMOTE_TOTAL_IMAGE_BYTES) {
+    throw new Error('Attached images are larger than 8 MB total.');
+  }
+  if (!text.trim() && images.length === 0) {
+    throw new Error('Message text or an image attachment is required.');
+  }
+
+  const createdAt = Number.isFinite(data.createdAt) ? data.createdAt : Date.now();
+  return {
+    id,
+    text,
+    images: images.map(({ base64, mimeType }) => ({ base64, mimeType })),
+    imageCount: images.length,
+    createdAt
+  };
+}
+
+function sanitizeUserMessage(message) {
+  return {
+    id: message.id,
+    text: message.text,
+    imageCount: message.imageCount,
+    createdAt: message.createdAt
+  };
+}
+
+function messageContentForStorage(message) {
+  if (!message.imageCount) return message.text;
+  const suffix = `[${message.imageCount} image attachment${message.imageCount === 1 ? '' : 's'}]`;
+  return message.text.trim() ? `${message.text}\n\n${suffix}` : suffix;
+}
+
 async function createUserAccount(username, password) {
   const userId = uuidv4();
   const accountUuid = uuidv4();
@@ -407,14 +501,18 @@ async function authenticateSocketJoin(socket, role, token) {
     return false;
   }
 
-  if (socket.uuid) socket.leave(socket.uuid);
+  if (socket.uuid) {
+    socket.leave(socket.uuid);
+    if (socket.role) socket.leave(roleRoom(socket.uuid, socket.role));
+  }
   socket.join(auth.account_uuid);
+  socket.join(roleRoom(auth.account_uuid, role));
   socket.role = role;
   socket.uuid = auth.account_uuid;
   socket.deviceTokenId = auth.id;
 
   if (role === 'cli') {
-    socket.to(auth.account_uuid).emit('cli_authorized', { message: 'CLI got authorized' });
+    io.to(roleRoom(auth.account_uuid, 'app')).emit('cli_authorized', { message: 'CLI got authorized' });
   }
 
   socket.emit('join_authorized', { uuid: auth.account_uuid, role });
@@ -440,7 +538,7 @@ io.on('connection', (socket) => {
 
       await db.run('INSERT INTO messages (uuid, role, content, timestamp) VALUES (?, ?, ?, ?)',
         socket.uuid, 'ai', text, Date.now());
-      socket.to(socket.uuid).emit('ai_message', { text, turnId, final });
+      io.to(roleRoom(socket.uuid, 'app')).emit('ai_message', { text, turnId, final });
     } catch (err) {
       console.error('[Socket AI Message Error]:', err);
     }
@@ -451,7 +549,7 @@ io.on('connection', (socket) => {
       if (socket.role !== 'cli' || !socket.uuid) return;
       const { turnId } = data || {};
       if (!turnId) return;
-      socket.to(socket.uuid).emit('turn_end', { turnId });
+      io.to(roleRoom(socket.uuid, 'app')).emit('turn_end', { turnId });
     } catch (err) {
       console.error('[Socket Turn End Error]:', err);
     }
@@ -465,7 +563,7 @@ io.on('connection', (socket) => {
 
       await db.run('INSERT INTO tool_requests (id, uuid, action_type, details, status, timestamp) VALUES (?, ?, ?, ?, ?, ?)',
         id, socket.uuid, actionType, details || '', 'pending', Date.now());
-      socket.to(socket.uuid).emit('tool_request', { id, actionType, details: details || '' });
+      io.to(roleRoom(socket.uuid, 'app')).emit('tool_request', { id, actionType, details: details || '' });
     } catch (err) {
       console.error('[Socket Tool Request Error]:', err);
     }
@@ -479,7 +577,7 @@ io.on('connection', (socket) => {
 
       await db.run('UPDATE tool_requests SET status = ? WHERE id = ? AND uuid = ? AND status = ?',
         'cancelled', id, socket.uuid, 'pending');
-      socket.to(socket.uuid).emit('tool_cancel', { id });
+      io.to(roleRoom(socket.uuid, 'app')).emit('tool_cancel', { id });
     } catch (err) {
       console.error('[Socket Tool Cancel Error]:', err);
     }
@@ -491,7 +589,7 @@ io.on('connection', (socket) => {
       const { id, actionType, details, status, timestamp } = data || {};
       if (!id || !actionType) return;
 
-      socket.to(socket.uuid).emit('tool_event', { id, actionType, details: details || '', status, timestamp });
+      io.to(roleRoom(socket.uuid, 'app')).emit('tool_event', { id, actionType, details: details || '', status, timestamp });
     } catch (err) {
       console.error('[Socket Tool Event Error]:', err);
     }
@@ -503,7 +601,7 @@ io.on('connection', (socket) => {
       const { type, payload, turnId, timestamp } = data || {};
       if (!type || !turnId) return;
 
-      socket.to(socket.uuid).emit(type, {
+      io.to(roleRoom(socket.uuid, 'app')).emit(type, {
         ...(payload && typeof payload === 'object' ? payload : {}),
         turnId,
         timestamp
@@ -532,6 +630,82 @@ io.on('connection', (socket) => {
       }
     } catch (err) {
       console.error('[Socket Tool Response Error]:', err);
+    }
+  });
+
+  socket.on('remote_capabilities_request', async () => {
+    try {
+      if (socket.role !== 'app' || !socket.uuid) return;
+      io.to(roleRoom(socket.uuid, 'cli')).emit('remote_capabilities_request', { requestedAt: Date.now() });
+    } catch (err) {
+      console.error('[Socket Capabilities Request Error]:', err);
+    }
+  });
+
+  socket.on('remote_capabilities', async (data) => {
+    try {
+      if (socket.role !== 'cli' || !socket.uuid) return;
+      const capabilities = data && typeof data === 'object' ? data : {};
+      io.to(roleRoom(socket.uuid, 'app')).emit('remote_capabilities', {
+        imageAttachments: capabilities.imageAttachments === true,
+        provider: String(capabilities.provider || ''),
+        model: String(capabilities.model || ''),
+        maxImages: Number.isFinite(capabilities.maxImages) ? capabilities.maxImages : MAX_REMOTE_IMAGES,
+        maxImageBytes: Number.isFinite(capabilities.maxImageBytes) ? capabilities.maxImageBytes : MAX_REMOTE_IMAGE_BYTES
+      });
+    } catch (err) {
+      console.error('[Socket Capabilities Error]:', err);
+    }
+  });
+
+  socket.on('user_message', async (data) => {
+    const id = typeof data?.id === 'string' ? data.id : '';
+    try {
+      if (socket.role !== 'app' || !socket.uuid) return;
+
+      const cliSockets = io.sockets.adapter.rooms.get(roleRoom(socket.uuid, 'cli'));
+      if (!cliSockets || cliSockets.size === 0) {
+        socket.emit('user_message_status', {
+          id,
+          status: 'failed',
+          error: 'No paired CLI is currently connected.'
+        });
+        return;
+      }
+
+      const message = normalizeUserMessagePayload(data);
+      await db.run('INSERT INTO messages (uuid, role, content, timestamp) VALUES (?, ?, ?, ?)',
+        socket.uuid, 'user', messageContentForStorage(message), Date.now());
+
+      io.to(roleRoom(socket.uuid, 'cli')).emit('user_message', message);
+      io.to(roleRoom(socket.uuid, 'app')).emit('user_message', sanitizeUserMessage(message));
+    } catch (err) {
+      const payload = { id, error: err.message || 'Invalid message.' };
+      socket.emit('user_message_error', payload);
+      socket.emit('user_message_status', { ...payload, status: 'failed' });
+      console.error('[Socket User Message Error]:', err);
+    }
+  });
+
+  socket.on('user_message_status', async (data) => {
+    try {
+      if (socket.role !== 'cli' || !socket.uuid) return;
+      const { id, status, error } = data || {};
+      if (!id || !['queued', 'running', 'done', 'failed'].includes(status)) return;
+      io.to(roleRoom(socket.uuid, 'app')).emit('user_message_status', { id, status, error: error || null });
+    } catch (err) {
+      console.error('[Socket User Message Status Error]:', err);
+    }
+  });
+
+  socket.on('user_message_error', async (data) => {
+    try {
+      if (socket.role !== 'cli' || !socket.uuid) return;
+      const { id, error } = data || {};
+      if (!id || !error) return;
+      io.to(roleRoom(socket.uuid, 'app')).emit('user_message_error', { id, error });
+    } catch (err) {
+      console.error('[Socket User Message Error Relay Error]:', err);
     }
   });
 });

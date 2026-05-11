@@ -19,6 +19,7 @@ import { delegateTask } from './delegateTask.js';
 import { bananasplitReview } from './bananasplitReview.js';
 import { renameFile } from './renameFile.js';
 import { generateImage } from './imageGen.js';
+import { requestModelSwitch } from './modelSwitch.js';
 import {
     browserOpen,
     browserSnapshot,
@@ -34,6 +35,7 @@ import {
 import { mcpManager } from '../utils/mcp.js';
 import { saveMemoryTool, listMemoryTool, deleteMemoryTool, saveProjectMemoryTool, listProjectMemoryTool, deleteProjectMemoryTool } from './memoryTools.js';
 import { pluginRegistry } from '../utils/plugins.js';
+import { MODEL_SWITCH_TOOL_NAME, providerSupportsModelSwitch } from '../utils/modelSwitch.js';
 
 const BROWSER_TOOLS = [
     {
@@ -502,6 +504,25 @@ export const TOOLS = [
             },
             required: ['sourcePath', 'destinationPath']
         }
+    },
+    {
+        name: MODEL_SWITCH_TOOL_NAME,
+        label: 'Request Model Switch',
+        description: 'Recommend switching to another model for the current provider. This pauses for user approval before switching; if declined, continue with the current model.',
+        parameters: {
+            type: 'object',
+            properties: {
+                recommendedModel: {
+                    type: 'string',
+                    description: 'Exact model ID to switch to. Must be one of the model IDs listed in the system prompt for the current provider.'
+                },
+                reason: {
+                    type: 'string',
+                    description: 'One brief sentence explaining why this model is a better fit than the current model.'
+                }
+            },
+            required: ['recommendedModel', 'reason']
+        }
     }
 ];
 
@@ -515,6 +536,7 @@ export function getAvailableTools(config = {}) {
         if (tool.browserUse && !browserUseAvailable) return false;
         if (tool.name === 'bananasplit_review' && config.bananaSplit?.enabled !== true) return false;
         if (tool.name === 'generate_image' && config.imageGen?.enabled !== true) return false;
+        if (tool.name === MODEL_SWITCH_TOOL_NAME && !providerSupportsModelSwitch(config)) return false;
         if (config.bananaSplitReviewerMode) {
             const allowedForBananaSplitReview = [
                 'read_file', 'read_many_files', 'search_files',
@@ -645,6 +667,7 @@ export async function executeTool(name, args, config) {
         case 'browser_forward': return await browserForward(args, config);
         case 'browser_reload': return await browserReload(args, config);
         case 'browser_close': return await browserClose(args, config);
+        case MODEL_SWITCH_TOOL_NAME: return await requestModelSwitch(args, config);
         default: return `Unknown tool: ${name}`;
     }
 }

@@ -11,6 +11,7 @@ import { printMarkdown } from '../utils/markdown.js';
 import { MISTRAL_MODELS } from '../constants.js';
 import { AUTO_MODEL_DESCRIPTIONS, AUTO_ROUTER_MODELS, buildRoutingPrompt, parseRoutingResponse, openAIMessagesToAutoRouterHistory } from '../utils/autoModel.js';
 import { sendRemoteAiSegment } from '../remote.js';
+import { getActiveModelForNextRequest } from '../utils/modelSwitch.js';
 
 export class MistralProvider {
     constructor(config) {
@@ -99,6 +100,7 @@ export class MistralProvider {
             while (true) {
                 let stream = null;
                 try {
+                    activeModel = getActiveModelForNextRequest(this, activeModel);
                     stream = await this.openai.chat.completions.create({
                         model: activeModel,
                         messages: this.messages,

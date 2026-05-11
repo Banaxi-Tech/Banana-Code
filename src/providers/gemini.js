@@ -10,6 +10,7 @@ import { printMarkdown } from '../utils/markdown.js';
 import { GEMINI_MODELS } from '../constants.js';
 import { AUTO_MODEL_DESCRIPTIONS, AUTO_ROUTER_MODELS, buildRoutingPrompt, parseRoutingResponse, geminiMessagesToAutoRouterHistory } from '../utils/autoModel.js';
 import { sendRemoteAiSegment } from '../remote.js';
+import { getActiveModelForNextRequest } from '../utils/modelSwitch.js';
 
 /** When Gemini Auto Mode routing fails, use this model instead of the first list entry (2.5 Flash). */
 const GEMINI_AUTO_FALLBACK_MODEL = 'gemini-3-flash-preview';
@@ -190,6 +191,7 @@ export class GeminiProvider {
         try {
             while (true) {
                 let currentTurnText = '';
+                activeModel = getActiveModelForNextRequest(this, activeModel);
                 const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${activeModel}:streamGenerateContent?alt=sse&key=${this.apiKey}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },

@@ -27,10 +27,11 @@ import { estimateConversationTokens } from './utils/tokens.js';
 import { mcpManager } from './utils/mcp.js';
 import { startApiServer } from './server.js';
 import { loadPlugins, pluginRegistry, installPlugin, removePlugin, getConfiguredPlugins } from './utils/plugins.js';
-import { connectRemoteTooling, disconnectRemoteTooling, finalizeTurn, redeemRemotePairingCode, resetRemoteAiResponseTracking, sendRemoteAiMessage } from './remote.js';
+import { REMOTE_IMAGE_LIMITS, connectRemoteTooling, disconnectRemoteTooling, finalizeTurn, publishRemoteCapabilities, redeemRemotePairingCode, resetRemoteAiResponseTracking, sendRemoteAiMessage, sendRemoteUserMessageError, sendRemoteUserMessageStatus } from './remote.js';
 import { promptToMergeExternalAgentInstructions } from './utils/projectInstructions.js';
 import { extractUltrathinkDirective, isUltrathinkMention, providerSupportsUltrathink, rainbowUltrathink, styleUltrathinkMentions, styleVoiceCommands } from './utils/ultrathink.js';
 import { cleanupVoiceClip, getVoiceConfig, hasUsableVoiceConfig, isSupportedVoiceFile, recordVoiceClip, setupVoiceConfig, transcribeWithGroq } from './voice.js';
+import { setRuntimeModelOverride } from './utils/modelSwitch.js';
 
 let config;
 let providerInstance;
@@ -46,6 +47,7 @@ let currentSessionTitle = null;
 const commandHistory = [];
 let historyIndex = -1;
 let currentInputSaved = '';
+let activePromptInterrupt = null;
 
 function createProvider(overrideConfig = null) {
     const activeConfig = overrideConfig || getBananaSplitLocalConfig(config);
@@ -100,6 +102,30 @@ function replaceProviderForCurrentConfig({ preservePortableHistory = false } = {
     }
 }
 
+async function requestModelSwitchFromCli({ currentModel, recommendedModel, reason }) {
+    const { select } = await import('@inquirer/prompts');
+    const choice = await select({
+        message: `The model recommends switching from ${currentModel} to ${recommendedModel}.${reason ? ` Reason: ${reason}` : ''}`,
+        choices: [
+            { name: `Switch to ${recommendedModel}`, value: 'switch' },
+            { name: `Continue with ${currentModel}`, value: 'continue' }
+        ],
+        loop: false
+    });
+
+    if (choice !== 'switch') {
+        return { accepted: false, model: currentModel };
+    }
+
+    setRuntimeModelOverride(providerInstance, recommendedModel);
+    return { accepted: true, model: recommendedModel };
+}
+
+function attachRuntimeModelSwitchHandler(provider = providerInstance) {
+    if (!provider?.config) return;
+    provider.config.requestModelSwitch = requestModelSwitchFromCli;
+}
+
 function messageHasToolActivity(message) {
     if (!message || typeof message !== 'object') return false;
     if (message.role === 'tool' || message.type === 'function_call_output') return true;
@@ -125,6 +151,272 @@ function isEmptyAssistantResponse(responseText) {
 const EMPTY_TOOL_RESPONSE_CONTINUATION = `SYSTEM: Your previous turn used tools but ended without a final message.
 Continue from the latest tool results and complete the user's request now. If the work is done, give a concise final answer. If another tool call is required, call it. Do not repeat completed tool calls unless the latest tool result shows that is necessary.`;
 
+const IMAGE_ATTACHMENT_PROVIDERS = new Set([
+    'gemini',
+    'claude',
+    'openai',
+    'mistral',
+    'deepseek',
+    'kimi',
+    'openrouter',
+    'ollama_cloud',
+    'ollama',
+    'lmstudio'
+]);
+
+let userTurnQueue = Promise.resolve();
+
+function enqueueCliTask(task) {
+    const run = userTurnQueue
+        .catch(() => {})
+        .then(task);
+    userTurnQueue = run.catch(() => {});
+    return run;
+}
+
+function waitForQueuedCliWork() {
+    return userTurnQueue.catch(() => {});
+}
+
+function getRemoteChatCapabilities() {
+    const activeConfig = getBananaSplitLocalConfig(config || {});
+    const provider = getActiveProviderId();
+    return {
+        imageAttachments: IMAGE_ATTACHMENT_PROVIDERS.has(provider),
+        provider,
+        model: providerInstance?.modelName || activeConfig.model || config?.model || '',
+        maxImages: REMOTE_IMAGE_LIMITS.maxImages,
+        maxImageBytes: REMOTE_IMAGE_LIMITS.maxImageBytes
+    };
+}
+
+function publishCurrentRemoteCapabilities() {
+    publishRemoteCapabilities(getRemoteChatCapabilities());
+}
+
+function connectCurrentRemoteTooling(credentials) {
+    return connectRemoteTooling(credentials, {
+        getCapabilities: getRemoteChatCapabilities,
+        onUserMessage: handleRemoteUserMessage
+    });
+}
+
+function interruptPromptForBackgroundTurn() {
+    if (typeof activePromptInterrupt === 'function') {
+        activePromptInterrupt();
+    }
+}
+
+function decodedBase64Bytes(base64) {
+    const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+    return Math.floor((base64.length * 3) / 4) - padding;
+}
+
+function normalizeRemoteImages(images = []) {
+    if (!Array.isArray(images)) return [];
+    if (images.length > REMOTE_IMAGE_LIMITS.maxImages) {
+        throw new Error(`At most ${REMOTE_IMAGE_LIMITS.maxImages} images can be attached.`);
+    }
+
+    let totalBytes = 0;
+    return images.map((img, index) => {
+        const mimeType = String(img?.mimeType || img?.mediaType || '').toLowerCase();
+        const base64 = typeof img?.base64 === 'string' ? img.base64.trim() : '';
+        if (!REMOTE_IMAGE_LIMITS.mimeTypes.includes(mimeType)) {
+            throw new Error(`Image ${index + 1} has an unsupported type.`);
+        }
+        if (!base64) {
+            throw new Error(`Image ${index + 1} is empty.`);
+        }
+
+        const bytes = decodedBase64Bytes(base64);
+        if (!Number.isFinite(bytes) || bytes <= 0) {
+            throw new Error(`Image ${index + 1} is not valid base64.`);
+        }
+        if (bytes > REMOTE_IMAGE_LIMITS.maxImageBytes) {
+            throw new Error(`Image ${index + 1} is larger than 2 MB.`);
+        }
+
+        totalBytes += bytes;
+        if (totalBytes > REMOTE_IMAGE_LIMITS.maxTotalImageBytes) {
+            throw new Error('Attached images are larger than 8 MB total.');
+        }
+
+        return { base64, mimeType };
+    });
+}
+
+async function prepareUserTurnInput(rawText, initialImages = []) {
+    let finalInput = String(rawText || '');
+    let attachedImages = [...initialImages];
+    let ultrathinkEnabled = false;
+    const activeProviderConfig = getBananaSplitLocalConfig(config);
+    const ultrathinkDirective = extractUltrathinkDirective(finalInput);
+    if (ultrathinkDirective.enabled) {
+        finalInput = ultrathinkDirective.text;
+        if (providerSupportsUltrathink(activeProviderConfig)) {
+            ultrathinkEnabled = true;
+            console.log(`${chalk.gray('(Using ')}${rainbowUltrathink()}${chalk.gray(' maximum reasoning for this message)')}`);
+        }
+    }
+
+    const fileMentions = [];
+    const mentionRegex = /@@?("[^"]+"|'[^']+'|[^\s]+)/g;
+    let match;
+    while ((match = mentionRegex.exec(finalInput)) !== null) {
+        if (isUltrathinkMention(match[0])) continue;
+        fileMentions.push(match[0]);
+    }
+
+    if (fileMentions.length > 0) {
+        let addedFiles = 0;
+        let addedImages = 0;
+        const fsSync = await import('fs');
+        const path = await import('path');
+        const os = await import('os');
+
+        for (const mention of fileMentions) {
+            const isDouble = mention.startsWith('@@');
+            let rawPath = isDouble ? mention.substring(2) : mention.substring(1);
+            if ((rawPath.startsWith('"') && rawPath.endsWith('"')) || (rawPath.startsWith("'") && rawPath.endsWith("'"))) {
+                rawPath = rawPath.substring(1, rawPath.length - 1);
+            }
+
+            let filepath;
+            if (rawPath.startsWith('~')) {
+                rawPath = path.join(os.homedir(), rawPath.substring(1));
+            }
+
+            if (path.isAbsolute(rawPath) || rawPath.startsWith('/') || rawPath.startsWith('\\')) {
+                filepath = rawPath;
+            } else {
+                filepath = path.resolve(process.cwd(), rawPath);
+            }
+
+            try {
+                if (!fsSync.existsSync(filepath)) {
+                    throw new Error('File does not exist');
+                }
+
+                const stat = fsSync.statSync(filepath);
+                if (!stat.isFile()) continue;
+
+                const lower = filepath.toLowerCase();
+                const isImage = lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.webp') || lower.endsWith('.gif');
+                if (isImage) {
+                    const buffer = fsSync.readFileSync(filepath);
+                    const base64 = buffer.toString('base64');
+                    let mimeType = 'image/png';
+                    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) mimeType = 'image/jpeg';
+                    else if (lower.endsWith('.webp')) mimeType = 'image/webp';
+                    else if (lower.endsWith('.gif')) mimeType = 'image/gif';
+
+                    attachedImages.push({ base64, mimeType, path: filepath });
+                    addedImages++;
+                } else {
+                    const content = fsSync.readFileSync(filepath, 'utf8');
+                    finalInput += `\n\n--- File Context: ${filepath} ---\n${content}\n--- End of ${filepath} ---`;
+                    addedFiles++;
+                }
+            } catch (e) {
+                console.log(chalk.yellow(`Warning: Could not read file for mention ${mention} (Resolved path: ${filepath})`));
+            }
+        }
+
+        if (addedFiles > 0 || addedImages > 0) {
+            const fileMsg = addedFiles > 0 ? `${addedFiles} file(s)` : '';
+            const imgMsg = addedImages > 0 ? `${addedImages} image(s)` : '';
+            const separator = (addedFiles > 0 && addedImages > 0) ? ' and ' : '';
+            console.log(chalk.gray(`(Attached ${fileMsg}${separator}${imgMsg} to context)`));
+        }
+    }
+
+    return { finalInput, attachedImages, ultrathinkEnabled };
+}
+
+async function processUserTurn({
+    text,
+    attachedImages = [],
+    source = 'cli',
+    remoteMessageId = null,
+    titleSource = text
+} = {}) {
+    if (!currentSessionId) currentSessionId = generateSessionId();
+    if (!providerInstance) providerInstance = createProvider();
+
+    if (source === 'remote') {
+        sendRemoteUserMessageStatus(remoteMessageId, 'running');
+        const imageLabel = attachedImages.length > 0
+            ? ` (${attachedImages.length} image${attachedImages.length === 1 ? '' : 's'})`
+            : '';
+        console.log(chalk.blue(`\n[Remote Chat] Phone message${imageLabel}:`));
+        if (String(text || '').trim()) {
+            console.log(chalk.white(String(text)));
+        }
+    }
+
+    const prepared = await prepareUserTurnInput(text, attachedImages);
+    return await sendPromptToAi(prepared.finalInput, {
+        attachedImages: prepared.attachedImages,
+        ultrathinkEnabled: prepared.ultrathinkEnabled,
+        titleSource
+    });
+}
+
+function enqueueUserTurn(options) {
+    return enqueueCliTask(() => processUserTurn(options));
+}
+
+function enqueueRemoteUserTurn(options) {
+    return enqueueCliTask(() => {
+        const capabilities = getRemoteChatCapabilities();
+        if (options.attachedImages?.length > 0 && !capabilities.imageAttachments) {
+            throw new Error(`The active provider (${capabilities.provider}) does not support image attachments.`);
+        }
+
+        return processUserTurn(options);
+    });
+}
+
+function handleRemoteUserMessage(data = {}) {
+    const id = typeof data.id === 'string' ? data.id : '';
+    try {
+        if (!id) {
+            throw new Error('Remote message id is required.');
+        }
+
+        const text = typeof data.text === 'string' ? data.text : '';
+        const images = normalizeRemoteImages(data.images || []);
+        if (!text.trim() && images.length === 0) {
+            throw new Error('Message text or an image attachment is required.');
+        }
+
+        interruptPromptForBackgroundTurn();
+        sendRemoteUserMessageStatus(id, 'queued');
+        enqueueRemoteUserTurn({
+            text,
+            attachedImages: images,
+            source: 'remote',
+            remoteMessageId: id,
+            titleSource: text.trim() || 'Phone image message'
+        })
+            .then(() => sendRemoteUserMessageStatus(id, 'done'))
+            .catch((err) => {
+                const message = err?.message || 'Phone message failed.';
+                sendRemoteUserMessageError(id, message);
+                sendRemoteUserMessageStatus(id, 'failed', message);
+                console.log(chalk.red(`[Remote Chat] Message failed: ${message}`));
+            });
+    } catch (err) {
+        const message = err?.message || 'Invalid phone message.';
+        if (id) {
+            sendRemoteUserMessageError(id, message);
+            sendRemoteUserMessageStatus(id, 'failed', message);
+        }
+        console.log(chalk.red(`[Remote Chat] Rejected message: ${message}`));
+    }
+}
+
 async function sendPromptToAi(finalInput, { attachedImages = [], ultrathinkEnabled = false, titleSource = finalInput } = {}) {
     if (config.autoFeedWorkspace) {
         const { getWorkspaceTree } = await import('./utils/workspace.js');
@@ -136,6 +428,8 @@ async function sendPromptToAi(finalInput, { attachedImages = [], ultrathinkEnabl
             providerInstance.updateSystemPrompt(newSysPrompt);
         }
     }
+
+    attachRuntimeModelSwitchHandler();
 
     let modifiedInput = finalInput;
     for (const hook of pluginRegistry.lifecycleHooks.onBeforeMessage) {
@@ -258,7 +552,17 @@ async function sendPromptToAi(finalInput, { attachedImages = [], ultrathinkEnabl
     return responseText;
 }
 
-async function handleSlashCommand(command) {
+function enqueueSlashCommand(command) {
+    return enqueueCliTask(async () => {
+        try {
+            await handleSlashCommand(command, { runUserTurn: processUserTurn });
+        } finally {
+            publishCurrentRemoteCapabilities();
+        }
+    });
+}
+
+async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {}) {
     const [cmd, ...args] = command.split(' ');
 
     if (pluginRegistry.commands[cmd]) {
@@ -422,8 +726,14 @@ async function handleSlashCommand(command) {
                         } else {
                             const supported = found.supported_parameters || [];
                             const hasToolCalling = supported.includes('tools') || supported.includes('tool_choice');
+                            const inputModalities = found.architecture?.input_modalities || [];
+                            const hasImageInput = inputModalities.includes('image');
                             if (hasToolCalling) {
-                                console.log(chalk.green(`✔ "${newModel}" supports tool calling.`));
+                                const imageStatus = hasImageInput ? ' and image input' : '';
+                                console.log(chalk.green(`✔ "${newModel}" supports tool calling${imageStatus}.`));
+                                if (!hasImageInput) {
+                                    console.log(chalk.yellow(`   Note: OpenRouter does not list image input for this model.`));
+                                }
                             } else {
                                 console.log(chalk.red(`✘ "${newModel}" does NOT support tool calling. Banana Code may not work correctly.`));
                                 console.log(chalk.gray(`   Supported parameters: ${supported.join(', ') || 'none listed'}`));
@@ -479,7 +789,7 @@ async function handleSlashCommand(command) {
             const redeemed = await redeemRemotePairingCode(pairingCode);
             if (!redeemed) break;
 
-            const result = await connectRemoteTooling(redeemed);
+            const result = await connectCurrentRemoteTooling(redeemed);
             if (result && result.uuid) {
                 config.remoteUuid = result.uuid;
                 config.remoteDeviceToken = result.token;
@@ -540,7 +850,7 @@ async function handleSlashCommand(command) {
                 }
 
                 console.log(chalk.gray(`Transcribed: ${transcript}`));
-                await sendPromptToAi(transcript, { titleSource: transcript });
+                await runUserTurn({ text: transcript, source: 'voice', titleSource: transcript });
             } catch (err) {
                 console.log(chalk.red(`Voice input failed: ${err.message}`));
             } finally {
@@ -1751,6 +2061,10 @@ function promptUser() {
         let onData;    // Declare early so resolve closure can reference it
         let onResize;  // Same for resize listener
         let ultrathinkAnimationTimer = null;
+        const interruptThisPrompt = () => {
+            if (resolveCalled) return;
+            resolve(REPROMPT_SIGNAL);
+        };
 
         const stopUltrathinkAnimation = () => {
             if (ultrathinkAnimationTimer) {
@@ -1787,7 +2101,11 @@ function promptUser() {
 
         const originalResolve = resolve;
         resolve = (val) => {
+            if (resolveCalled) return;
             resolveCalled = true;
+            if (activePromptInterrupt === interruptThisPrompt) {
+                activePromptInterrupt = null;
+            }
             stopUltrathinkAnimation();
             process.stdout.write('\x1b[?2004l'); // disable bracketed paste mode
             if (onResize) process.stdout.removeListener('resize', onResize);
@@ -1832,6 +2150,7 @@ function promptUser() {
         };
 
         drawPromptBoxInitial('');
+        activePromptInterrupt = interruptThisPrompt;
 
         if (!process.stdin.isTTY) {
             const rl = readline.createInterface({ input: process.stdin });
@@ -2008,7 +2327,7 @@ async function main() {
         global.createProvider = createProvider;
 
         if (config.remoteUuid && config.remoteDeviceToken) {
-            connectRemoteTooling({
+            connectCurrentRemoteTooling({
                 uuid: config.remoteUuid,
                 token: config.remoteDeviceToken,
                 deviceType: config.remoteDeviceType || 'cli'
@@ -2080,6 +2399,7 @@ async function main() {
             currentSessionId = generateSessionId();
             providerInstance = createProvider();
         }
+        publishCurrentRemoteCapabilities();
 
         let ultraMemoryInterval;
         if (config.useUltraMemory) {
@@ -2092,239 +2412,23 @@ async function main() {
         while (true) {
             const inputLine = await promptUser();
 
-            if (inputLine === REPROMPT_SIGNAL) continue;
+            if (inputLine === REPROMPT_SIGNAL) {
+                await waitForQueuedCliWork();
+                continue;
+            }
 
             const trimmed = inputLine.trim();
 
             if (!trimmed) continue;
 
             if (trimmed.startsWith('/')) {
-                await handleSlashCommand(trimmed);
+                await enqueueSlashCommand(trimmed);
+                await waitForQueuedCliWork();
+                publishCurrentRemoteCapabilities();
             } else {
-                let finalInput = trimmed;
-                let attachedImages = [];
-                let ultrathinkEnabled = false;
-                const activeProviderConfig = getBananaSplitLocalConfig(config);
-                const ultrathinkDirective = extractUltrathinkDirective(finalInput);
-                if (ultrathinkDirective.enabled) {
-                    finalInput = ultrathinkDirective.text;
-                    if (providerSupportsUltrathink(activeProviderConfig)) {
-                        ultrathinkEnabled = true;
-                        console.log(`${chalk.gray('(Using ')}${rainbowUltrathink()}${chalk.gray(' maximum reasoning for this message)')}`);
-                    }
-                }
-
-                // Robustly extract file mentions, supporting quoted paths like @"path with spaces"
-                const fileMentions = [];
-                const mentionRegex = /@@?("[^"]+"|[^\s]+)/g;
-                let match;
-                while ((match = mentionRegex.exec(finalInput)) !== null) {
-                    if (isUltrathinkMention(match[0])) continue;
-                    fileMentions.push(match[0]);
-                }
-
-                if (fileMentions.length > 0) {
-                    let addedFiles = 0;
-                    let addedImages = 0;
-                    const fsSync = await import('fs');
-                    const path = await import('path');
-                    const os = await import('os');
-
-                    for (const mention of fileMentions) {
-                        let isDouble = mention.startsWith('@@');
-                        let rawPath = isDouble ? mention.substring(2) : mention.substring(1);
-
-                        // Remove quotes if present
-                        if (rawPath.startsWith('"') && rawPath.endsWith('"')) {
-                            rawPath = rawPath.substring(1, rawPath.length - 1);
-                        }
-
-                        let filepath;
-
-                        // Expand ~ to home directory
-                        if (rawPath.startsWith('~')) {
-                            rawPath = path.join(os.homedir(), rawPath.substring(1));
-                        }
-
-                        // Resolve absolute vs relative
-                        if (path.isAbsolute(rawPath) || rawPath.startsWith('/') || rawPath.startsWith('\\')) {
-                            filepath = rawPath;
-                        } else {
-                            filepath = path.resolve(process.cwd(), rawPath);
-                        }
-
-                        try {
-                            if (fsSync.existsSync(filepath)) {
-                                const stat = fsSync.statSync(filepath);
-                                if (stat.isFile()) {
-                                    const lower = filepath.toLowerCase();
-                                    const isImage = lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.webp') || lower.endsWith('.gif');
-
-                                    if (isImage) {
-                                        const buffer = fsSync.readFileSync(filepath);
-                                        const base64 = buffer.toString('base64');
-                                        let mimeType = 'image/png';
-                                        if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) mimeType = 'image/jpeg';
-                                        else if (lower.endsWith('.webp')) mimeType = 'image/webp';
-                                        else if (lower.endsWith('.gif')) mimeType = 'image/gif';
-
-                                        attachedImages.push({ base64, mimeType, path: filepath });
-                                        addedImages++;
-                                    } else {
-                                        const content = fsSync.readFileSync(filepath, 'utf8');
-                                        finalInput += `\n\n--- File Context: ${filepath} ---\n${content}\n--- End of ${filepath} ---`;
-                                        addedFiles++;
-                                    }
-                                }
-                            } else {
-                                throw new Error('File does not exist');
-                            }
-                        } catch (e) {
-                            console.log(chalk.yellow(`Warning: Could not read file for mention ${mention} (Resolved path: ${filepath})`));
-                        }
-                    }
-                    if (addedFiles > 0 || addedImages > 0) {
-                        const fileMsg = addedFiles > 0 ? `${addedFiles} file(s)` : '';
-                        const imgMsg = addedImages > 0 ? `${addedImages} image(s)` : '';
-                        const separator = (addedFiles > 0 && addedImages > 0) ? ' and ' : '';
-                        console.log(chalk.gray(`(Attached ${fileMsg}${separator}${imgMsg} to context)`));
-                    }
-                }
-
-                if (config.autoFeedWorkspace) {
-                    const { getWorkspaceTree } = await import('./utils/workspace.js');
-                    const tree = await getWorkspaceTree();
-                    const { getSystemPrompt } = await import('./prompt.js');
-                    let newSysPrompt = getSystemPrompt(config);
-                    newSysPrompt += `\n\n--- Workspace File Tree ---\n${tree}\n--- End of Tree ---`;
-                    if (typeof providerInstance.updateSystemPrompt === 'function') {
-                        providerInstance.updateSystemPrompt(newSysPrompt);
-                    }
-                }
-
-                // Execute onBeforeMessage lifecycle hooks
-                let modifiedInput = finalInput;
-                for (const hook of pluginRegistry.lifecycleHooks.onBeforeMessage) {
-                    try {
-                        const res = await hook({ text: modifiedInput, images: attachedImages }, config);
-                        if (res !== undefined) {
-                            if (typeof res === 'object' && res !== null) {
-                                if (res.text !== undefined) modifiedInput = res.text;
-                                if (res.images !== undefined) attachedImages = res.images;
-                            } else {
-                                modifiedInput = String(res);
-                            }
-                        }
-                    } catch (e) {
-                        console.log(chalk.yellow(`Warning: Plugin onBeforeMessage hook failed: ${e.message}`));
-                    }
-                }
-
-                process.stdout.write(chalk.cyan('✦ '));
-                global.isAiSpeaking = true;
-                let responseText;
-                const messageCountBeforeResponse = Array.isArray(providerInstance.messages) ? providerInstance.messages.length : 0;
-                resetRemoteAiResponseTracking();
-                try {
-                    responseText = await providerInstance.sendMessage({ text: modifiedInput, images: attachedImages, ultrathink: ultrathinkEnabled });
-                } finally {
-                    global.isAiSpeaking = false;
-                }
-
-                if (
-                    isEmptyAssistantResponse(responseText) &&
-                    hasToolActivitySince(providerInstance, messageCountBeforeResponse)
-                ) {
-                    console.log(chalk.gray('\n(Model returned no final message after tool use; asking it to continue...)'));
-                    global.isAiSpeaking = true;
-                    try {
-                        responseText = await providerInstance.sendMessage(EMPTY_TOOL_RESPONSE_CONTINUATION);
-                    } finally {
-                        global.isAiSpeaking = false;
-                    }
-                }
-
-                // Execute onAfterMessage lifecycle hooks
-                for (const hook of pluginRegistry.lifecycleHooks.onAfterMessage) {
-                    try {
-                        const res = await hook(responseText, config);
-                        if (res !== undefined) responseText = res;
-                    } catch (e) {
-                        console.log(chalk.yellow(`Warning: Plugin onAfterMessage hook failed: ${e.message}`));
-                    }
-                }
-
-                sendRemoteAiMessage(responseText);
-                finalizeTurn();
-                resetRemoteAiResponseTracking();
-
-                console.log(); // Extra newline after AI response
-
-                // Auto-generate title every 10 messages (or on the 3rd message)
-                const msgLen = providerInstance.messages ? providerInstance.messages.length : 0;
-                if (!currentSessionTitle && msgLen >= 3 || msgLen > 0 && msgLen % 10 === 0) {
-                    const titleSpinner = ora({ text: 'Generating chat title...', color: 'gray', stream: process.stdout }).start();
-                    try {
-                        const originalUseMarked = config.useMarkedTerminal;
-                        const originalDebug = config.debug;
-                        config.useMarkedTerminal = false;
-                        config.debug = false;
-
-                        const titlePrompt = "SYSTEM: You are a title generator. Based on this conversation, provide a VERY SHORT (2-5 words) title. Reply ONLY with the title string, no quotes or formatting.";
-
-                        const { AUTO_ROUTER_MODELS } = await import('./utils/autoModel.js');
-                        const titleBaseConfig = getBananaSplitLocalConfig(config);
-                        let titleModel = titleBaseConfig.model;
-
-                        let providerKey = titleBaseConfig.provider;
-                        if (providerKey === 'openai' && titleBaseConfig.authType === 'oauth') {
-                            providerKey = 'openai_oauth';
-                        }
-
-                        if (AUTO_ROUTER_MODELS[providerKey]) {
-                            titleModel = AUTO_ROUTER_MODELS[providerKey];
-                        }
-
-                        // Use isApiMode to keep the title generation completely silent
-                        const titleConfig = {
-                            ...titleBaseConfig,
-                            bananaSplit: {
-                                ...titleBaseConfig.bananaSplit,
-                                enabled: false
-                            },
-                            isApiMode: true,
-                            model: titleModel
-                        };
-                        const titleProvider = createProvider(titleConfig);
-
-                        // Deep copy messages so the AI knows the context, but modifications don't leak back
-                        if (providerInstance.messages) {
-                            titleProvider.messages = JSON.parse(JSON.stringify(providerInstance.messages));
-                        }
-
-                        const title = await titleProvider.sendMessage(titlePrompt);
-                        currentSessionTitle = title.replace(/['"]/g, '').trim();
-
-                        config.useMarkedTerminal = originalUseMarked;
-                        config.debug = originalDebug;
-                    } catch (e) {
-                        // ignore title gen errors
-                    }
-                    titleSpinner.stop();
-                }
-
-                // Save session after AI message
-                await saveSession(currentSessionId, {
-                    provider: getActiveProviderId(),
-                    model: providerInstance.modelName || config.model,
-                    messages: providerInstance.messages,
-                    title: currentSessionTitle
-                });
-
-                if (config.useUltraMemory) {
-                    const { runUltraMemoryBackground } = await import('./utils/ultraMemory.js');
-                    runUltraMemoryBackground(config, createProvider);
-                }
+                await enqueueUserTurn({ text: trimmed, source: 'cli', titleSource: trimmed });
+                await waitForQueuedCliWork();
+                publishCurrentRemoteCapabilities();
             }
         }
     } catch (error) {

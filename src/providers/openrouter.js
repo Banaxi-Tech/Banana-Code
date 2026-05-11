@@ -10,6 +10,43 @@ import { getSystemPrompt } from '../prompt.js';
 import { printMarkdown } from '../utils/markdown.js';
 import { sendRemoteAiSegment } from '../remote.js';
 
+function imageDataUrl(img) {
+    return `data:${img.mimeType};base64,${img.base64}`;
+}
+
+function openRouterImagePart(img) {
+    return {
+        type: 'image_url',
+        // OpenRouter's SDK/docs use imageUrl. Keep the exact shape here rather
+        // than relying on OpenAI SDK-specific image_url normalization.
+        imageUrl: {
+            url: imageDataUrl(img)
+        }
+    };
+}
+
+function normalizeOpenRouterContentPart(part) {
+    if (part?.type !== 'image_url') return part;
+
+    const url = part.imageUrl?.url || part.image_url?.url;
+    if (!url) return part;
+
+    return {
+        type: 'image_url',
+        imageUrl: { url }
+    };
+}
+
+function normalizeOpenRouterMessages(messages = []) {
+    return messages.map(message => {
+        if (!Array.isArray(message?.content)) return message;
+        return {
+            ...message,
+            content: message.content.map(normalizeOpenRouterContentPart)
+        };
+    });
+}
+
 export class OpenRouterProvider {
     constructor(config) {
         this.config = config;
@@ -53,12 +90,7 @@ export class OpenRouterProvider {
 
         const userContent = [{ type: 'text', text: message }];
         for (const img of images) {
-            userContent.push({
-                type: 'image_url',
-                image_url: {
-                    url: `data:${img.mimeType};base64,${img.base64}`
-                }
-            });
+            userContent.push(openRouterImagePart(img));
         }
         this.messages.push({ role: 'user', content: userContent });
 
@@ -74,7 +106,7 @@ export class OpenRouterProvider {
                 try {
                     stream = await this.openai.chat.completions.create({
                         model: this.modelName,
-                        messages: this.messages,
+                        messages: normalizeOpenRouterMessages(this.messages),
                         tools: this.tools,
                         stream: true
                     });

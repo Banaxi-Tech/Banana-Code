@@ -6,6 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import { getAvailableTools } from './tools/registry.js';
 import { getAvailableSkills } from './utils/skills.js';
+import { getModelSwitchPromptSection } from './utils/modelSwitch.js';
 
 export function getSystemPrompt(config = {}) {
     const platform = os.platform();
@@ -44,6 +45,8 @@ SAFETY RULES:
 4. If a tool action is disallowed by the user, suggest an alternative approach.
 
 Always use tools when they would help. Be concise but thorough. `;
+
+    prompt += getModelSwitchPromptSection(config);
 
     if (hasBrowserUse) {
         prompt += `

@@ -11,6 +11,7 @@ import { printMarkdown } from '../utils/markdown.js';
 import { KIMI_MODELS } from '../constants.js';
 import { AUTO_MODEL_DESCRIPTIONS, AUTO_ROUTER_MODELS, buildRoutingPrompt, parseRoutingResponse, openAIMessagesToAutoRouterHistory } from '../utils/autoModel.js';
 import { sendRemoteAiSegment } from '../remote.js';
+import { getActiveModelForNextRequest } from '../utils/modelSwitch.js';
 
 const KIMI_THINKING_MODELS = new Set([
     'kimi-k2.6',
@@ -31,6 +32,23 @@ function formatKimiError(error) {
         } catch (err) {}
     }
     return message;
+}
+
+function browserScreenshotMessage(toolResult) {
+    const screenshot = toolResult?.__browserScreenshot;
+    if (!screenshot?.base64 || !screenshot?.mimeType) return null;
+    return {
+        role: 'user',
+        content: [
+            { type: 'text', text: 'Browser screenshot for the latest observation:' },
+            {
+                type: 'image_url',
+                image_url: {
+                    url: `data:${screenshot.mimeType};base64,${screenshot.base64}`
+                }
+            }
+        ]
+    };
 }
 
 export class KimiProvider {
@@ -139,6 +157,7 @@ export class KimiProvider {
             while (true) {
                 let stream = null;
                 try {
+                    activeModel = getActiveModelForNextRequest(this, activeModel);
                     stream = await this.openai.chat.completions.create(this.buildRequestParams(activeModel));
                 } catch (e) {
                     if (spinner) spinner.stop();
@@ -227,6 +246,7 @@ export class KimiProvider {
                 }
                 this.messages.push(assistantMessage);
 
+                const browserScreenshotMessages = [];
                 for (const call of toolCalls) {
                     if (this.config.isApiMode && this.onToolStart) {
                         this.onToolStart(call.function.name);
@@ -255,7 +275,10 @@ export class KimiProvider {
                         tool_call_id: call.id,
                         content: typeof res === 'string' ? res : JSON.stringify(res)
                     });
+                    const screenshotMessage = browserScreenshotMessage(res);
+                    if (screenshotMessage) browserScreenshotMessages.push(screenshotMessage);
                 }
+                this.messages.push(...browserScreenshotMessages);
 
                 if (!this.config.isApiMode) {
                     spinner = ora({ text: 'Processing tool results...', color: 'yellow', stream: process.stdout }).start();

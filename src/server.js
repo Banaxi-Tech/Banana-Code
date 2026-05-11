@@ -12,7 +12,7 @@ import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
 import { DEFAULT_IMAGEGEN_BASE_URL, listImageGenModels, loadConfig, normalizeImageGenBaseUrl, saveConfig, copyBananaSplitProviderConfig, getBananaSplitLocalConfig } from './config.js';
-import { listSessions, loadSession, saveSession, generateSessionId } from './sessions.js';
+import { listSessions, loadSession, saveSession, generateSessionId, deleteSession } from './sessions.js';
 import { getSessionPermissions, setYoloMode } from './permissions.js';
 import { getContextBreakdown } from './utils/tokens.js';
 import { TOOLS } from './tools/registry.js';
@@ -20,6 +20,7 @@ import { mcpManager } from './utils/mcp.js';
 import { BrowserBridge } from './utils/browserBridge.js';
 import { extractUltrathinkDirective, isUltrathinkMention, providerSupportsUltrathink } from './utils/ultrathink.js';
 import { GROQ_WHISPER_MODELS, getVoiceConfig, mimeTypeFromFileName, transcribeWithGroq } from './voice.js';
+import { setRuntimeModelOverride } from './utils/modelSwitch.js';
 
 const PROVIDER_REINIT_KEYS = new Set([
     'provider',
@@ -128,6 +129,109 @@ async function buildContextInfo(providerInstance) {
     }
 
     return payload;
+}
+
+function cloneMessages(messages) {
+    if (!Array.isArray(messages)) return [];
+    return JSON.parse(JSON.stringify(messages));
+}
+
+function buildPendingUserMessage(providerId, input = {}, config = {}) {
+    const text = String(input.text || '');
+    const images = Array.isArray(input.images) ? input.images : [];
+
+    if (providerId === 'gemini') {
+        const parts = [{ text }];
+        for (const img of images) {
+            parts.push({
+                inlineData: {
+                    mimeType: img.mimeType,
+                    data: img.base64
+                }
+            });
+        }
+        return { role: 'user', parts };
+    }
+
+    if (providerId === 'claude') {
+        const content = [];
+        if (text) content.push({ type: 'text', text });
+        for (const img of images) {
+            content.push({
+                type: 'image',
+                source: {
+                    type: 'base64',
+                    media_type: img.mimeType,
+                    data: img.base64
+                }
+            });
+        }
+        return { role: 'user', content };
+    }
+
+    if (providerId === 'openrouter') {
+        const content = [{ type: 'text', text }];
+        for (const img of images) {
+            content.push({
+                type: 'image_url',
+                imageUrl: {
+                    url: `data:${img.mimeType};base64,${img.base64}`
+                }
+            });
+        }
+        return { role: 'user', content };
+    }
+
+    if (['openai', 'mistral', 'deepseek', 'kimi'].includes(providerId) && config.authType !== 'oauth') {
+        const content = [{ type: 'text', text }];
+        for (const img of images) {
+            content.push({
+                type: 'image_url',
+                image_url: {
+                    url: `data:${img.mimeType};base64,${img.base64}`
+                }
+            });
+        }
+        return { role: 'user', content };
+    }
+
+    const message = { role: 'user', content: text };
+    if (images.length > 0) {
+        if (providerId === 'openai' && config.authType === 'oauth') {
+            message.attachedImages = images;
+        } else {
+            message.images = images.map(img => img.base64);
+        }
+    }
+    return message;
+}
+
+function extractMessageText(message = {}) {
+    if (typeof message.content === 'string') return message.content;
+    if (Array.isArray(message.content)) {
+        return message.content
+            .map(part => typeof part === 'string' ? part : part?.text || '')
+            .filter(Boolean)
+            .join('\n');
+    }
+    if (Array.isArray(message.parts)) {
+        return message.parts
+            .map(part => part?.text || '')
+            .filter(Boolean)
+            .join('\n');
+    }
+    return '';
+}
+
+function appendPendingUserMessage(messages, pendingUserMessage) {
+    const nextMessages = cloneMessages(messages);
+    const pendingText = extractMessageText(pendingUserMessage);
+    const lastMessage = nextMessages[nextMessages.length - 1];
+    if (lastMessage?.role === 'user' && extractMessageText(lastMessage) === pendingText) {
+        return nextMessages;
+    }
+    nextMessages.push(pendingUserMessage);
+    return nextMessages;
 }
 
 function resolveAttachmentPath(rawPath, workspace) {
@@ -543,6 +647,32 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
             });
         };
 
+        const requestModelSwitchFromApi = async ({ currentModel, recommendedModel, reason }) => {
+            const ticketId = `model_switch_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+            const decision = await sessionPermissionHandler(ticketId, 'model_switch', {
+                title: 'Switch model?',
+                message: `The model recommends switching from ${currentModel} to ${recommendedModel}.`,
+                currentModel,
+                recommendedModel,
+                reason,
+                approveLabel: `Switch to ${recommendedModel}`,
+                denyLabel: `Continue with ${currentModel}`
+            });
+
+            if (!decision.allowed) {
+                return { accepted: false, model: currentModel };
+            }
+
+            setRuntimeModelOverride(providerInstance, recommendedModel);
+            return { accepted: true, model: recommendedModel };
+        };
+
+        const attachRuntimeModelSwitchHandler = () => {
+            if (providerInstance?.config) {
+                providerInstance.config.requestModelSwitch = requestModelSwitchFromApi;
+            }
+        };
+
         ws.on('message', async (message) => {
             try {
                 const data = JSON.parse(message);
@@ -781,6 +911,46 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                     return;
                 }
 
+                if (data.type === 'delete_session') {
+                    const sessionId = String(data.sessionId || '').trim();
+                    if (!sessionId) {
+                        ws.send(JSON.stringify({ type: 'error', message: 'Session id is required.' }));
+                        return;
+                    }
+
+                    const wasActiveSession = String(currentSessionId || '') === sessionId;
+                    const deleted = await deleteSession(sessionId);
+                    if (!deleted) {
+                        ws.send(JSON.stringify({ type: 'error', message: `Session ${sessionId} not found.` }));
+                        return;
+                    }
+
+                    if (wasActiveSession) {
+                        currentSessionId = null;
+                        if (providerInstance) {
+                            providerInstance.messages = [{ role: 'system', content: providerInstance.systemPrompt }];
+                        }
+                    }
+
+                    console.log(chalk.cyan(`[API] Deleted session: ${sessionId}`));
+                    ws.send(JSON.stringify({
+                        type: 'session_deleted',
+                        sessionId,
+                        active: wasActiveSession
+                    }));
+
+                    const allSessions = await listSessions();
+                    const sessions = allSessions.map(s => ({
+                        uuid: s.uuid,
+                        title: s.title,
+                        updatedAt: s.updatedAt,
+                        provider: s.provider,
+                        model: s.model
+                    }));
+                    ws.send(JSON.stringify({ type: 'sessions_list', sessions }));
+                    return;
+                }
+
                 if (data.type === 'load_session') {
                     const session = await loadSession(data.sessionId);
                     if (!session) {
@@ -836,6 +1006,7 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                 if (data.type === 'clear_history') {
                     if (providerInstance) {
                         providerInstance.messages = [{ role: 'system', content: providerInstance.systemPrompt }];
+                        currentSessionId = null;
                         console.log(chalk.cyan(`[API] Conversation history cleared.`));
                         ws.send(JSON.stringify({ type: 'history_cleared' }));
                     }
@@ -965,7 +1136,9 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                     let effectiveUserText = originalUserText;
                     let ultrathinkEnabled = false;
 
-                    if (shouldRecreateProviderForBrowser()) {
+                    if (!currentSessionId) {
+                        providerInstance = createProviderForConfig(createProvider, getApiRuntimeConfig());
+                    } else if (shouldRecreateProviderForBrowser()) {
                         const previousConfig = providerInstance.config || config;
                         providerInstance = reinitializeProviderPreservingHistory(providerInstance, createProvider, previousConfig, getApiRuntimeConfig());
                         await refreshSystemPrompt(providerInstance, getApiRuntimeConfig());
@@ -990,6 +1163,7 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                         ...providerInstance.config,
                         ...getApiRuntimeConfig()
                     };
+                    attachRuntimeModelSwitchHandler();
                     providerInstance.onChunk = (chunk) => {
                         if (ws.readyState === ws.OPEN) {
                             ws.send(JSON.stringify({ type: 'chunk', content: chunk }));
@@ -1032,19 +1206,40 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                             }))
                         }));
                     }
+                    if (!currentSessionId) currentSessionId = generateSessionId();
+                    const activeProviderId = getActiveProviderId(config);
+                    const titleSource = originalUserText.trim() || (Array.isArray(data.browserElements) && data.browserElements.length > 0 ? 'Browser element edit' : (preparedInput.images.length > 0 ? 'Image attachment' : 'File attachment'));
+                    const sessionTitle = titleSource.substring(0, 50) + (titleSource.length > 50 ? '...' : '');
+                    const pendingMessages = appendPendingUserMessage(
+                        providerInstance.messages,
+                        buildPendingUserMessage(activeProviderId, preparedInput, getApiRuntimeConfig())
+                    );
+
+                    await saveSession(currentSessionId, {
+                        messages: pendingMessages,
+                        provider: activeProviderId,
+                        model: config.model,
+                        title: sessionTitle
+                    });
+
+                    if (ws.readyState === ws.OPEN) {
+                        ws.send(JSON.stringify({
+                            type: 'session_started',
+                            sessionId: currentSessionId,
+                            title: sessionTitle
+                        }));
+                    }
+
                     const providerInput = { text: preparedInput.text, images: preparedInput.images, ultrathink: ultrathinkEnabled };
                     const response = await providerInstance.sendMessage(preparedInput.images.length > 0 || ultrathinkEnabled ? providerInput : preparedInput.text);
                     console.log(chalk.gray(`[API] AI response complete.`));
                     
                     // Save the session to disk
-                    if (!currentSessionId) currentSessionId = generateSessionId();
-                    const titleSource = originalUserText.trim() || (Array.isArray(data.browserElements) && data.browserElements.length > 0 ? 'Browser element edit' : (preparedInput.images.length > 0 ? 'Image attachment' : 'File attachment'));
-                    
                     await saveSession(currentSessionId, {
                         messages: providerInstance.messages,
-                        provider: config.provider,
+                        provider: activeProviderId,
                         model: config.model,
-                        title: titleSource.substring(0, 50) + (titleSource.length > 50 ? '...' : '')
+                        title: sessionTitle
                     });
 
                     let financial = null;
@@ -1057,6 +1252,7 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                             type: 'done', 
                             finalResponse: response,
                             usage: financial,
+                            sessionId: currentSessionId,
                             generatedImages
                         }));
                     }
@@ -1080,6 +1276,16 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
     app.get('/api/sessions', async (req, res) => {
         const sessions = await listSessions();
         res.json(sessions);
+    });
+
+    app.delete('/api/sessions/:sessionId', async (req, res) => {
+        const deleted = await deleteSession(req.params.sessionId);
+        if (!deleted) {
+            res.status(404).json({ error: 'Session not found' });
+            return;
+        }
+
+        res.json({ ok: true, sessionId: req.params.sessionId });
     });
 
     app.get('/api/config', (req, res) => {

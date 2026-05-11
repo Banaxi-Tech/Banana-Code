@@ -11,6 +11,7 @@ import { printMarkdown } from '../utils/markdown.js';
 import { DEEPSEEK_MODELS } from '../constants.js';
 import { AUTO_MODEL_DESCRIPTIONS, AUTO_ROUTER_MODELS, buildRoutingPrompt, parseRoutingResponse, openAIMessagesToAutoRouterHistory } from '../utils/autoModel.js';
 import { sendRemoteAiSegment } from '../remote.js';
+import { getActiveModelForNextRequest } from '../utils/modelSwitch.js';
 
 function formatDeepSeekError(error) {
     let message = error.message || String(error);
@@ -125,6 +126,7 @@ export class DeepSeekProvider {
             while (true) {
                 let stream = null;
                 try {
+                    activeModel = getActiveModelForNextRequest(this, activeModel);
                     stream = await this.openai.chat.completions.create(this.buildRequestParams(activeModel));
                 } catch (e) {
                     if (spinner) spinner.stop();

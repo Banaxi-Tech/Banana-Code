@@ -10,9 +10,9 @@ export const AUTO_MODEL_DESCRIPTIONS = {
     // OpenAI Codex (OAuth)
     'gpt-5.5':              'Most capable OpenAI model. Best for complex reasoning, hard coding problems, architecture design.',
     'gpt-5.4':              'Highly capable OpenAI model. Great for complex reasoning and coding.',
-    'gpt-5.4-mini':         'Fast and cheap GPT-5.4 variant. Great for simple questions, quick fixes, low-complexity work.',
+    'gpt-5.4-mini':         'Fast and cheap GPT-5.4 variant. Cheapest OAuth/Codex option. Great for simple questions, quick fixes, low-complexity work.',
     'gpt-5.3-codex':        'Strong coding model (2026). Excellent for code generation, review, and software engineering.',
-    'gpt-5.2':              'General purpose GPT-5.2. Good balance of capability and speed. Cheapest OAuth option.',
+    'gpt-5.2':              'General purpose GPT-5.2. Good balance of capability and speed, but not the cheapest OAuth/Codex option.',
     // Claude
     'claude-opus-4-7':      'Anthropic flagship (April 2026). Ultimate intelligence, deepest reasoning (xhigh/max effort). Best for frontier-level architectural design and extremely complex bugs.',
     'claude-opus-4-6':      'Highly capable previous flagship. Excellent for complex analysis, long documents, and hard bugs where Opus 4.7 might be overkill.',

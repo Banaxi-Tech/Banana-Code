@@ -11,8 +11,16 @@ let isConnected = false;
 let pendingRequests = new Map();
 let currentTurnId = null;
 let sentTextThisResponse = '';
+let remoteHandlers = {};
+let remoteCapabilitiesProvider = null;
 
 const REMOTE_API_URL = process.env.REMOTE_API_URL || 'https://bananacode.sh';
+export const REMOTE_IMAGE_LIMITS = Object.freeze({
+    maxImages: 4,
+    maxImageBytes: 2 * 1024 * 1024,
+    maxTotalImageBytes: 8 * 1024 * 1024,
+    mimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
+});
 
 export function finalizeTurn() {
     if (socket && currentTurnId) {
@@ -95,6 +103,33 @@ export function sendRemoteImageGenEvent(type, payload = {}) {
     });
 }
 
+export function publishRemoteCapabilities(capabilities = null) {
+    if (!socket || !isConnected) return;
+
+    const payload = capabilities || (typeof remoteCapabilitiesProvider === 'function'
+        ? remoteCapabilitiesProvider()
+        : null);
+    if (!payload) return;
+
+    socket.emit('remote_capabilities', {
+        imageAttachments: payload.imageAttachments === true,
+        provider: payload.provider || '',
+        model: payload.model || '',
+        maxImages: payload.maxImages || REMOTE_IMAGE_LIMITS.maxImages,
+        maxImageBytes: payload.maxImageBytes || REMOTE_IMAGE_LIMITS.maxImageBytes
+    });
+}
+
+export function sendRemoteUserMessageStatus(id, status, error = null) {
+    if (!socket || !isConnected || !id || !status) return;
+    socket.emit('user_message_status', { id, status, error });
+}
+
+export function sendRemoteUserMessageError(id, error) {
+    if (!socket || !isConnected || !id || !error) return;
+    socket.emit('user_message_error', { id, error });
+}
+
 export async function redeemRemotePairingCode(pairingCode) {
     const code = String(pairingCode || '').trim().toUpperCase();
     if (!code) {
@@ -122,10 +157,15 @@ export async function redeemRemotePairingCode(pairingCode) {
     }
 }
 
-export async function connectRemoteTooling(credentials) {
+export async function connectRemoteTooling(credentials, handlers = {}) {
     if (socket) {
         socket.disconnect();
     }
+
+    remoteHandlers = handlers || {};
+    remoteCapabilitiesProvider = typeof remoteHandlers.getCapabilities === 'function'
+        ? remoteHandlers.getCapabilities
+        : null;
 
     const uuid = credentials?.uuid;
     const token = credentials?.token || credentials?.remoteDeviceToken;
@@ -143,8 +183,25 @@ export async function connectRemoteTooling(credentials) {
         isConnected = true;
     });
 
+    socket.on('join_authorized', () => {
+        publishRemoteCapabilities();
+    });
+
     socket.on('cli_authorized', (data) => {
         console.log(chalk.green(`\n[Remote Tooling] Mobile App connected!`));
+        publishRemoteCapabilities();
+    });
+
+    socket.on('remote_capabilities_request', () => {
+        publishRemoteCapabilities();
+    });
+
+    socket.on('user_message', (data) => {
+        if (typeof remoteHandlers.onUserMessage === 'function') {
+            remoteHandlers.onUserMessage(data);
+        } else if (data?.id) {
+            sendRemoteUserMessageStatus(data.id, 'failed', 'This CLI cannot accept phone messages.');
+        }
     });
 
     socket.on('tool_response', (data) => {
@@ -195,6 +252,8 @@ export function disconnectRemoteTooling() {
         socket = null;
     }
 
+    remoteHandlers = {};
+    remoteCapabilitiesProvider = null;
     isConnected = false;
     delete global.apiPermissionHandler;
     delete global.apiPermissionCancelHandler;

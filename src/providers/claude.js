@@ -12,6 +12,7 @@ import { CLAUDE_MODELS, CLAUDE_PRICING } from '../constants.js';
 import { AUTO_MODEL_DESCRIPTIONS, AUTO_ROUTER_MODELS, buildRoutingPrompt, parseRoutingResponse, claudeMessagesToAutoRouterHistory } from '../utils/autoModel.js';
 import { sendRemoteAiSegment } from '../remote.js';
 import { extractUltrathinkDirective } from '../utils/ultrathink.js';
+import { getActiveModelForNextRequest } from '../utils/modelSwitch.js';
 
 function claudeToolResultContent(toolResult) {
     const text = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
@@ -195,6 +196,7 @@ export class ClaudeProvider {
             while (true) {
                 let stream = null;
                 try {
+                    activeModel = getActiveModelForNextRequest(this, activeModel);
                     // Translate our internal virtual model IDs (like *-fast) back to 
                     // official Anthropic model IDs before sending the request.
                     const cacheObj = this.config.useExtendedCache ? { type: 'ephemeral', ttl: '1h' } : { type: 'ephemeral' };

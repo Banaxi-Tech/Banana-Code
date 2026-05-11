@@ -44,6 +44,7 @@ Type these into the chat to control the app:
 
 ## 🧠 Key Features
 - Multi-Provider: Switch between the best models on the fly, including DeepSeek V4 Flash/Pro and Kimi K2.6/K2.5.
+- Model Switch Tool: On supported providers, the AI can recommend temporarily using another model for the current turn. Banana Code asks before applying the switch. Future messages return to the configured model. OpenRouter, local Ollama, and local LM Studio are excluded.
 - BananaSplit: Run cheaper local coding turns with Ollama or LM Studio, then call a non-local cloud model through 'bananasplit_review' to review and directly fix issues.
 - ImageGen: Optional Stable Diffusion image generation through 'generate_image' after setup with /imagegen.
 - Sub-Agents: Use 'delegate_task' to spawn researchers, coders, or reviewers.
