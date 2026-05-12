@@ -56,7 +56,7 @@ While tools like Cursor provide great GUI experiences, Banana Code is built for 
 
 ## ✨ Key Features
 
-- **Multi-Provider Support**: Switch between **Google Gemini**, **Anthropic Claude**, **OpenAI** (API key or ChatGPT / Codex OAuth), **Mistral AI**, **DeepSeek** (V4 Flash and V4 Pro), **Kimi AI** (K2.6 and K2.5), **OpenRouter** (any model ID; see [OpenRouter setup](#openrouter-setup)), **Ollama Cloud**, and **Ollama (Local)** effortlessly.
+- **Multi-Provider Support**: Switch between **Google Gemini**, **Anthropic Claude**, **OpenAI** (API key or ChatGPT / Codex OAuth), **Mistral AI**, **DeepSeek** (V4 Flash and V4 Pro), **Kimi AI** (K2.6 and K2.5), **Qwen** (Qwen 3.6/3.5 via Alibaba Cloud Model Studio), **OpenRouter** (any model ID; see [OpenRouter setup](#openrouter-setup)), **Ollama Cloud**, and **Ollama (Local)** effortlessly.
 - **Auto Mode**: For most providers, pick **Auto Mode** as your model — a small “router” model reads your prompt and chooses which model **and reasoning effort** to use for that turn.
 - **Model Switch Tool**: On supported providers, the AI can recommend switching models mid-conversation and Banana Code asks before applying it. OpenRouter, local Ollama, and local LM Studio are excluded.
 - **Interactive Terminal Suite**: Move beyond one-shot commands. The AI can now spawn persistent terminal sessions to handle interactive prompts like `npm init`, `git commit` (with editors), or Y/N confirmations in real-time.
@@ -91,7 +91,7 @@ On your first run, Banana Code will walk you through a quick setup to configure 
 banana
 ```
 
-You'll need your API keys handy for Gemini, Claude, OpenAI (unless you use ChatGPT sign-in), Mistral, DeepSeek, Kimi AI, Ollama Cloud, or OpenRouter. For **Kimi AI**, use your Moonshot/Kimi API key. For **OpenRouter**, you enter an API key and a custom model ID; Banana Code checks OpenRouter’s model list so the model supports **tool calling** before continuing.
+You'll need your API keys handy for Gemini, Claude, OpenAI (unless you use ChatGPT sign-in), Mistral, DeepSeek, Kimi AI, Qwen, Ollama Cloud, or OpenRouter. For **Kimi AI**, use your Moonshot/Kimi API key. For **Qwen**, use your DashScope/Qwen API key from Alibaba Cloud Model Studio or Qwen Cloud. For **OpenRouter**, you enter an API key and a custom model ID; Banana Code checks OpenRouter’s model list so the model supports **tool calling** before continuing.
 
 ## 📖 Usage
 
@@ -126,7 +126,7 @@ While in a chat, use these special commands (type `/help` for the full list):
 
 | Command | What it does |
 |--------|----------------|
-| `/provider` | Switch provider: `gemini`, `claude`, `openai`, `mistral`, `deepseek`, `kimi`, `openrouter`, `ollama_cloud`, `ollama` |
+| `/provider` | Switch provider: `gemini`, `claude`, `openai`, `mistral`, `deepseek`, `kimi`, `qwen`, `openrouter`, `ollama_cloud`, `ollama` |
 | `/model` | Change model; omit the name to open the menu (includes **Auto Mode** where supported). |
 | `/chats` | Browse and resume saved sessions (auto-titled). |
 | `/clear` | Clear the current conversation (same provider/model). |
@@ -143,6 +143,7 @@ While in a chat, use these special commands (type `/help` for the full list):
 | `/style` | Change AI writing style (Normal, Explanatory, Formal). |
 | `/effort` | Change Claude reasoning effort (low, medium, high, xhigh, max). |
 | `/debug` | Toggle debug output (e.g. tool results, auto-route diagnostics). |
+| `/goals` | Clarify requirements, produce a plan, then run the approved implementation with scoped auto-approval. |
 | `/plan` | Plan mode: AI outlines a plan before large edits. |
 | `/agent` | Default: AI applies changes directly. |
 | `/skill-creator` | Skill Creator mode: AI helps write custom Agent Skills. |
@@ -153,7 +154,9 @@ While in a chat, use these special commands (type `/help` for the full list):
 | `/help` | Show all commands. |
 | `/exit` | Quit (also `Ctrl+D` / `Ctrl+C` flow). |
 
-**File context:** Type `@path/to/file` or `@@/absolute/path` in your message to attach file contents to that prompt. Use `@@path/to/image.png` to attach an image (supported by Gemini/Claude/OpenAI/Kimi K2.6/K2.5).
+**File context:** Type `@path/to/file` or `@@/absolute/path` in your message to attach file contents to that prompt. Use `@@path/to/image.png` to attach an image (supported by Gemini/Claude/OpenAI/Kimi/Qwen and other multimodal providers/models).
+
+**Prompt mode shortcut:** Press `Shift+Tab` in the normal input box to cycle `default mode`, `auto accept edits on`, and `plan mode`.
 
 **Voice input:** Type `/voice` to configure your Groq API key and choose `whisper-large-v3-turbo` or `whisper-large-v3` the first time. Later `/voice` starts a microphone recording, and `/voice path/to/audio.wav` or `/voice path/to/audio.mp3` transcribes an existing file.
 
@@ -162,11 +165,15 @@ While in a chat, use these special commands (type `/help` for the full list):
 ### ⚡ Auto Mode
 When **Auto Mode** is selected as the model (`/model` or initial setup), each new user message is first sent to a **small, fast router model** (per provider) together with the **last seven conversation messages** (formatted as context only). The router returns JSON: which concrete model should handle **this** turn and a short reason—so short follow-ups like “Implement it” can pick a capable model when the history shows a large task. The assistant’s reply then uses that model. If routing fails, providers fall back to a sensible default (e.g. Gemini may fall back to **Gemini 3 Flash**). **OpenRouter** and **local Ollama** do not offer Auto Mode (fixed model ID vs. local tag list).
 
-Supported providers also expose a `request_model_switch` tool. The AI can call it when the current model is clearly overpowered, underpowered, too slow, or too expensive for the task. Banana Code then asks whether to use the recommended model for the rest of the current turn or continue with the current model. Future messages return to the configured model unless another switch is approved. This is available for Gemini, Claude, OpenAI, Mistral, DeepSeek, Kimi, and Ollama Cloud; it is disabled for OpenRouter, local Ollama, and local LM Studio.
+Supported providers also expose a `request_model_switch` tool. The AI can call it when the current model is clearly overpowered, underpowered, too slow, or too expensive for the task. Banana Code then asks whether to use the recommended model for the rest of the current turn or continue with the current model. Future messages return to the configured model unless another switch is approved. This is available for Gemini, Claude, OpenAI, Mistral, DeepSeek, Kimi, Qwen, and Ollama Cloud; it is disabled for OpenRouter, local Ollama, and local LM Studio.
 
 ### Kimi AI setup
 
 [Kimi API](https://platform.kimi.ai) is Moonshot AI's OpenAI-compatible API. In Banana Code, choose **Kimi AI (Moonshot)** in `/provider`, paste your `MOONSHOT_API_KEY`, then choose `kimi-k2.6` or `kimi-k2.5`. Banana Code uses the official chat completions endpoint at `https://api.moonshot.ai/v1`.
+
+### Qwen setup
+
+[Qwen Cloud](https://docs.qwencloud.com/) and Alibaba Cloud Model Studio expose Qwen through an OpenAI-compatible Chat Completions API. In Banana Code, choose **Qwen (Alibaba Cloud)** in `/provider`, paste your DashScope/Qwen API key, select a region endpoint, then choose a model such as `qwen3.6-plus`, `qwen3.6-max-preview`, or `qwen3.5-plus`. You can also enter a custom model ID as Qwen adds new hosted models.
 
 ### 🚀 Claude Fast Mode
 Select models like **Claude Opus 4.6 (Fast Mode)** from the `/model` menu to dramatically speed up your workflow. Fast Mode provides 2.5x faster output speeds for high-intensity tasks. 
@@ -182,12 +189,21 @@ Banana Code layers **behavior modes** on top of the normal agent. Only one “st
 | Command | Role |
 |--------|------|
 | **`/agent`** | Default: full coding agent with tools (subject to permissions). |
+| **`/goals`** | Goals — ask any blocking questions up front, show a plan, then run the approved plan autonomously. |
 | **`/plan`** | [Plan mode](#plan-mode) — propose a written plan before larger edits. |
 | **`/skill-creator`** | [Skill Creator mode](#skill-creator-mode) — expert prompt engineer to create custom Agent Skills. |
 | **`/ask`** | [Ask mode](#ask-mode) — read-only Q&A; no file or state-changing edits. |
 | **`/security`** | [Security mode](#security-mode) — prioritize vulnerability review. |
 | **`/guard`** | Toggle Banana Guard (AI auto-approve for safe commands). |
 | **`/yolo`** | Auto-approve permission prompts (dangerous; use carefully). |
+
+### Goals
+
+Use **`/goals <request>`** for larger work where you want Banana Code to ask clarifying questions first, make a plan, and then keep working after approval. When the plan is ready, Banana Code shows a **Ready to code?** menu:
+
+- **Implement Plan (auto-accept edits, file reads, web fetches, and searches)** keeps shell commands behind explicit permission prompts.
+- **Implement Plan (also auto-accept commands)** runs the approved implementation with commands auto-approved too.
+- **Tell Banana Code what to change** sends feedback back into planning before implementation starts.
 
 ### Plan mode
 

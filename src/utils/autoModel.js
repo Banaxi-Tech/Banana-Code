@@ -37,6 +37,16 @@ export const AUTO_MODEL_DESCRIPTIONS = {
     // Kimi
     'kimi-k2.6':              'Kimi flagship model. Best for long-horizon coding, agentic workflows, multimodal tasks, and complex software engineering.',
     'kimi-k2.5':              'Highly capable Kimi model with strong coding, reasoning, tool use, and multimodal support.',
+    // Qwen
+    'qwen3.6-max-preview':    'Qwen preview flagship for the hardest reasoning, agentic coding, and complex multi-step software tasks.',
+    'qwen3.6-plus':           'Latest balanced Qwen model with 1M context. Strong default for coding, reasoning, tool use, and long-context work.',
+    'qwen3.6-flash':          'Latest fast Qwen model with 1M context. Best for simple tasks, quick fixes, and lower latency.',
+    'qwen3.5-plus':           'Highly capable Qwen model with 1M context. Good for coding, reasoning, and long-context tasks.',
+    'qwen3.5-flash':          'Fast Qwen 3.5 model with 1M context. Good for simple tasks and cost-sensitive turns.',
+    'qwen3-max':              'Stable Qwen flagship model. Best for demanding reasoning when a non-preview model is preferred.',
+    'qwen3-coder-next':       'Qwen coding model with long context. Best for code generation, refactors, and repository tasks.',
+    'qwen3-next-80b-a3b-thinking': 'Qwen thinking model. Use for reasoning-heavy tasks where explicit thinking is useful.',
+    'qwen3-next-80b-a3b-instruct': 'Qwen instruct model. Good for general tasks where thinking mode is not needed.',
     // Ollama Cloud
     'kimi-k2-thinking:cloud':   'Advanced reasoning model. Best for complex multi-step problems and hard math.',
     'kimi-k2.5:cloud':          'Strong cloud model with good reasoning. Great all-rounder.',
@@ -55,6 +65,7 @@ export const AUTO_ROUTER_MODELS = {
     mistral:        'mistral-small-latest',
     deepseek:       'deepseek-v4-flash',
     kimi:           'kimi-k2.5',
+    qwen:           'qwen3.6-flash',
     ollama_cloud:   'gemma4:31b-cloud',
 };
 

@@ -26,6 +26,7 @@ const PROVIDER_REINIT_KEYS = new Set([
     'provider',
     'model',
     'apiKey',
+    'qwenBaseUrl',
     'betaTools',
     'usePatchFile',
     'useMemory',
@@ -43,7 +44,7 @@ const PROVIDER_REINIT_KEYS = new Set([
 ]);
 
 const LOCAL_BANANA_SPLIT_PROVIDERS = new Set(['ollama', 'lmstudio']);
-const REVIEWER_BANANA_SPLIT_PROVIDERS = new Set(['gemini', 'claude', 'openai', 'mistral', 'deepseek', 'kimi', 'openrouter', 'ollama_cloud']);
+const REVIEWER_BANANA_SPLIT_PROVIDERS = new Set(['gemini', 'claude', 'openai', 'mistral', 'deepseek', 'kimi', 'qwen', 'openrouter', 'ollama_cloud']);
 const IMAGE_EXTENSIONS = new Map([
     ['.png', 'image/png'],
     ['.jpg', 'image/jpeg'],
@@ -182,7 +183,7 @@ function buildPendingUserMessage(providerId, input = {}, config = {}) {
         return { role: 'user', content };
     }
 
-    if (['openai', 'mistral', 'deepseek', 'kimi'].includes(providerId) && config.authType !== 'oauth') {
+    if (['openai', 'mistral', 'deepseek', 'kimi', 'qwen'].includes(providerId) && config.authType !== 'oauth') {
         const content = [{ type: 'text', text }];
         for (const img of images) {
             content.push({
@@ -388,7 +389,7 @@ function normalizeBananaSplitConfig(input = {}, currentConfig = {}) {
         throw new Error('BananaSplit local provider must be ollama or lmstudio.');
     }
     if (!REVIEWER_BANANA_SPLIT_PROVIDERS.has(reviewerProvider)) {
-        throw new Error('BananaSplit reviewer provider must be one of gemini, claude, openai, mistral, deepseek, kimi, openrouter, ollama_cloud.');
+        throw new Error('BananaSplit reviewer provider must be one of gemini, claude, openai, mistral, deepseek, kimi, qwen, openrouter, ollama_cloud.');
     }
 
     return {

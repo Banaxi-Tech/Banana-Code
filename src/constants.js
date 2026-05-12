@@ -55,6 +55,27 @@ export const KIMI_MODELS = [
     { name: 'Kimi K2.5 (multimodal, 256K)', value: 'kimi-k2.5' }
 ];
 
+export const DEFAULT_QWEN_BASE_URL = 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1';
+
+export const QWEN_MODELS = [
+    { name: 'Qwen 3.6 Max Preview (hard reasoning and coding, 256K)', value: 'qwen3.6-max-preview' },
+    { name: 'Qwen 3.6 Plus (balanced, 1M)', value: 'qwen3.6-plus' },
+    { name: 'Qwen 3.6 Plus Snapshot 2026-04-02', value: 'qwen3.6-plus-2026-04-02' },
+    { name: 'Qwen 3.6 Flash (fast, 1M)', value: 'qwen3.6-flash' },
+    { name: 'Qwen 3.6 Flash Snapshot 2026-04-16', value: 'qwen3.6-flash-2026-04-16' },
+    { name: 'Qwen 3.6 35B A3B', value: 'qwen3.6-35b-a3b' },
+    { name: 'Qwen 3.6 27B', value: 'qwen3.6-27b' },
+    { name: 'Qwen 3.5 Plus (balanced, 1M)', value: 'qwen3.5-plus' },
+    { name: 'Qwen 3.5 Plus Snapshot 2026-04-20', value: 'qwen3.5-plus-2026-04-20' },
+    { name: 'Qwen 3.5 Flash (fast, 1M)', value: 'qwen3.5-flash' },
+    { name: 'Qwen 3.5 397B A17B', value: 'qwen3.5-397b-a17b' },
+    { name: 'Qwen 3.5 122B A10B', value: 'qwen3.5-122b-a10b' },
+    { name: 'Qwen 3 Max (flagship stable)', value: 'qwen3-max' },
+    { name: 'Qwen 3 Coder Next (coding, 256K)', value: 'qwen3-coder-next' },
+    { name: 'Qwen 3 Next 80B Thinking', value: 'qwen3-next-80b-a3b-thinking' },
+    { name: 'Qwen 3 Next 80B Instruct', value: 'qwen3-next-80b-a3b-instruct' }
+];
+
 export const CODEX_MODELS = [
     { name: 'GPT-5.5 (Newest)', value: 'gpt-5.5' },
     { name: 'GPT-5.4', value: 'gpt-5.4' },

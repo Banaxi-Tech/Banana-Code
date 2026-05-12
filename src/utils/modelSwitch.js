@@ -9,7 +9,8 @@ import {
     OLLAMA_CLOUD_MODELS,
     MISTRAL_MODELS,
     DEEPSEEK_MODELS,
-    KIMI_MODELS
+    KIMI_MODELS,
+    QWEN_MODELS
 } from '../constants.js';
 
 export const MODEL_SWITCH_TOOL_NAME = 'request_model_switch';
@@ -39,6 +40,7 @@ export function getModelSwitchChoices(config = {}) {
     if (provider === 'mistral') return MISTRAL_MODELS;
     if (provider === 'deepseek') return DEEPSEEK_MODELS;
     if (provider === 'kimi') return KIMI_MODELS;
+    if (provider === 'qwen') return QWEN_MODELS;
     if (provider === 'ollama_cloud') return OLLAMA_CLOUD_MODELS;
 
     return [];

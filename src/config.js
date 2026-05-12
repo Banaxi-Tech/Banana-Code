@@ -9,7 +9,7 @@ import { execSync } from 'child_process';
 import fsSync from 'fs';
 import chalk from 'chalk';
 
-import { GEMINI_MODELS, CLAUDE_MODELS, OPENAI_MODELS, CODEX_MODELS, OLLAMA_CLOUD_MODELS, MISTRAL_MODELS, DEEPSEEK_MODELS, KIMI_MODELS } from './constants.js';
+import { GEMINI_MODELS, CLAUDE_MODELS, OPENAI_MODELS, CODEX_MODELS, OLLAMA_CLOUD_MODELS, MISTRAL_MODELS, DEEPSEEK_MODELS, KIMI_MODELS, QWEN_MODELS, DEFAULT_QWEN_BASE_URL } from './constants.js';
 import { pluginRegistry } from './utils/plugins.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.config', 'banana-code');
@@ -215,6 +215,10 @@ export function copyBananaSplitProviderConfig(provider, providerConfig) {
         result.lmStudioBaseUrl = providerConfig.lmStudioBaseUrl;
     }
 
+    if (provider === 'qwen') {
+        result.qwenBaseUrl = providerConfig.qwenBaseUrl;
+    }
+
     if (providerConfig.apiKey) {
         result.apiKey = providerConfig.apiKey;
     }
@@ -366,6 +370,7 @@ export async function setupBananaSplit(config = {}) {
         { name: 'Mistral AI', value: 'mistral' },
         { name: 'DeepSeek', value: 'deepseek' },
         { name: 'Kimi AI (Moonshot)', value: 'kimi' },
+        { name: 'Qwen (Alibaba Cloud)', value: 'qwen' },
         { name: 'OpenRouter (Any Model)', value: 'openrouter' },
         { name: 'Ollama Cloud', value: 'ollama_cloud' }
     ];
@@ -384,6 +389,7 @@ export async function setupBananaSplit(config = {}) {
         model: existing.reviewer?.model,
         apiKey: existing.reviewer?.apiKey || (config.provider === reviewerProvider ? config.apiKey : undefined),
         authType: existing.reviewer?.authType || (config.provider === reviewerProvider ? config.authType : undefined),
+        qwenBaseUrl: existing.reviewer?.qwenBaseUrl || (config.provider === reviewerProvider ? config.qwenBaseUrl : undefined),
         openaiCodexEffort: existing.reviewer?.openaiCodexEffort || (config.provider === reviewerProvider ? config.openaiCodexEffort : undefined),
         useExtendedCache: existing.reviewer?.useExtendedCache ?? (config.provider === reviewerProvider ? config.useExtendedCache : undefined),
         claudeEffort: existing.reviewer?.claudeEffort ?? (config.provider === reviewerProvider ? config.claudeEffort : undefined)
@@ -524,6 +530,56 @@ export async function setupProvider(provider, config = {}) {
         if (selectedModel === 'CUSTOM_ID') {
             selectedModel = await input({
                 message: 'Enter the exact Kimi model ID (e.g., kimi-k2.6):',
+                validate: (v) => v.trim().length > 0 || 'Model ID cannot be empty'
+            });
+        }
+        config.model = selectedModel;
+    } else if (provider === 'qwen') {
+        config.apiKey = await input({
+            message: 'Enter your DASHSCOPE_API_KEY / Qwen API key:',
+            default: config.apiKey
+        });
+
+        const qwenEndpointChoices = [
+            { name: 'International / Singapore (recommended)', value: DEFAULT_QWEN_BASE_URL },
+            { name: 'US / Virginia', value: 'https://dashscope-us.aliyuncs.com/compatible-mode/v1' },
+            { name: 'China / Beijing', value: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
+            { name: 'Enter custom OpenAI-compatible base URL...', value: 'CUSTOM_URL' }
+        ];
+        if (config.qwenBaseUrl && !qwenEndpointChoices.some(choice => choice.value === config.qwenBaseUrl)) {
+            qwenEndpointChoices.splice(3, 0, { name: `Current custom (${config.qwenBaseUrl})`, value: config.qwenBaseUrl });
+        }
+        const qwenEndpointDefault = qwenEndpointChoices.some(choice => choice.value === config.qwenBaseUrl)
+            ? config.qwenBaseUrl
+            : DEFAULT_QWEN_BASE_URL;
+        config.qwenBaseUrl = await select({
+            message: 'Select a Qwen API region endpoint:',
+            choices: qwenEndpointChoices,
+            default: qwenEndpointDefault,
+            loop: false
+        });
+
+        if (config.qwenBaseUrl === 'CUSTOM_URL') {
+            config.qwenBaseUrl = await input({
+                message: 'Enter the Qwen OpenAI-compatible base URL:',
+                default: DEFAULT_QWEN_BASE_URL,
+                validate: (v) => v.trim().length > 0 || 'Base URL cannot be empty'
+            });
+        }
+
+        config.qwenBaseUrl = config.qwenBaseUrl.trim().replace(/\/+$/, '');
+
+        const choices = [AUTO_CHOICE, ...QWEN_MODELS, { name: chalk.magenta('✎ Enter custom model ID...'), value: 'CUSTOM_ID' }];
+        let selectedModel = await select({
+            message: 'Select a Qwen model:',
+            choices,
+            loop: false,
+            pageSize: 15
+        });
+
+        if (selectedModel === 'CUSTOM_ID') {
+            selectedModel = await input({
+                message: 'Enter the exact Qwen model ID (e.g., qwen3.6-plus):',
                 validate: (v) => v.trim().length > 0 || 'Model ID cannot be empty'
             });
         }
@@ -723,6 +779,7 @@ async function runSetupWizard() {
             { name: 'Mistral AI', value: 'mistral' },
             { name: 'DeepSeek', value: 'deepseek' },
             { name: 'Kimi AI (Moonshot)', value: 'kimi' },
+            { name: 'Qwen (Alibaba Cloud)', value: 'qwen' },
             { name: 'OpenRouter (Any Model)', value: 'openrouter' },
             { name: 'Ollama Cloud', value: 'ollama_cloud' },
             { name: 'Ollama (Local)', value: 'ollama' },

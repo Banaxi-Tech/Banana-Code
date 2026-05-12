@@ -34,6 +34,8 @@ export function getRandomSpinnerText(provider) {
                 return 'DeepSeeking...';
             case 'kimi':
                 return 'Kimiing...';
+            case 'qwen':
+                return 'Qwening...';
             case 'openrouter':
                 return 'Routing...';
             case 'ollama':

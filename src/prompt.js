@@ -44,6 +44,13 @@ SAFETY RULES:
 3. Only use execute_command directly if the user has specifically asked you to perform a task that requires it (e.g., "install the dependencies for this project", "run the tests").
 4. If a tool action is disallowed by the user, suggest an alternative approach.
 
+# Clarifying Questions
+You have an \`ask_user_questions\` tool for structured, selectable clarification prompts.
+- Use it when a missing decision would materially change the plan, architecture, UI, data model, safety posture, or user-facing behavior.
+- Ask all foreseeable blocking questions in one call so the user can answer once and step away.
+- Do not overuse this in normal Agent Mode. For routine details that can be inferred from the codebase or the user's request, make a reasonable assumption and continue.
+- In Plan Mode, use it before writing the plan if the plan would otherwise rest on unclear requirements.
+
 Always use tools when they would help. Be concise but thorough. `;
 
     prompt += getModelSwitchPromptSection(config);

@@ -10,6 +10,7 @@ import { MistralProvider } from '../providers/mistral.js';
 import { OpenRouterProvider } from '../providers/openrouter.js';
 import { DeepSeekProvider } from '../providers/deepseek.js';
 import { KimiProvider } from '../providers/kimi.js';
+import { QwenProvider } from '../providers/qwen.js';
 
 import fs from 'fs';
 
@@ -58,6 +59,7 @@ async function run() {
             case 'mistral': return new MistralProvider(silentConfig);
             case 'deepseek': return new DeepSeekProvider(silentConfig);
             case 'kimi': return new KimiProvider(silentConfig);
+            case 'qwen': return new QwenProvider(silentConfig);
             case 'openrouter': return new OpenRouterProvider(silentConfig);
             case 'ollama_cloud': return new OllamaCloudProvider(silentConfig);
             case 'ollama': return new OllamaProvider(silentConfig);

@@ -6,8 +6,9 @@ import chalk from 'chalk';
 import ora from 'ora';
 import { confirmProjectLocalSettingsTrust, getBananaSplitLocalConfig, loadConfig, saveConfig, setupBananaSplit, setupImageGen, setupProvider } from './config.js';
 import { runStartup } from './startup.js';
-import { getSessionPermissions, setYoloMode } from './permissions.js';
+import { getSessionPermissions, setAutoAcceptEditsMode, setGoalsPermissionMode, setYoloMode } from './permissions.js';
 import { cleanupTerminalSessions } from './tools/terminal.js';
+import { getCreatedPlan, resetCreatedPlan } from './tools/createPlan.js';
 
 import { GeminiProvider } from './providers/gemini.js';
 import { ClaudeProvider } from './providers/claude.js';
@@ -19,6 +20,7 @@ import { MistralProvider } from './providers/mistral.js';
 import { OpenRouterProvider } from './providers/openrouter.js';
 import { DeepSeekProvider } from './providers/deepseek.js';
 import { KimiProvider } from './providers/kimi.js';
+import { QwenProvider } from './providers/qwen.js';
 
 import { loadSession, saveSession, generateSessionId, getLatestSessionId, listSessions } from './sessions.js';
 import { getSystemPrompt } from './prompt.js';
@@ -29,7 +31,7 @@ import { startApiServer } from './server.js';
 import { loadPlugins, pluginRegistry, installPlugin, removePlugin, getConfiguredPlugins } from './utils/plugins.js';
 import { REMOTE_IMAGE_LIMITS, connectRemoteTooling, disconnectRemoteTooling, finalizeTurn, publishRemoteCapabilities, redeemRemotePairingCode, resetRemoteAiResponseTracking, sendRemoteAiMessage, sendRemoteUserMessageError, sendRemoteUserMessageStatus } from './remote.js';
 import { promptToMergeExternalAgentInstructions } from './utils/projectInstructions.js';
-import { extractUltrathinkDirective, isUltrathinkMention, providerSupportsUltrathink, rainbowUltrathink, styleUltrathinkMentions, styleVoiceCommands } from './utils/ultrathink.js';
+import { extractUltrathinkDirective, isUltrathinkMention, providerSupportsUltrathink, rainbowUltrathink, rainbowVoice, styleUltrathinkMentions, styleVoiceCommands } from './utils/ultrathink.js';
 import { cleanupVoiceClip, getVoiceConfig, hasUsableVoiceConfig, isSupportedVoiceFile, recordVoiceClip, setupVoiceConfig, transcribeWithGroq } from './voice.js';
 import { setRuntimeModelOverride } from './utils/modelSwitch.js';
 
@@ -65,6 +67,7 @@ function createProvider(overrideConfig = null) {
         case 'mistral': return new MistralProvider(activeConfig);
         case 'deepseek': return new DeepSeekProvider(activeConfig);
         case 'kimi': return new KimiProvider(activeConfig);
+        case 'qwen': return new QwenProvider(activeConfig);
         case 'openrouter': return new OpenRouterProvider(activeConfig);
         case 'ollama_cloud': return new OllamaCloudProvider(activeConfig);
         case 'ollama': return new OllamaProvider(activeConfig);
@@ -158,6 +161,7 @@ const IMAGE_ATTACHMENT_PROVIDERS = new Set([
     'mistral',
     'deepseek',
     'kimi',
+    'qwen',
     'openrouter',
     'ollama_cloud',
     'ollama',
@@ -562,6 +566,202 @@ function enqueueSlashCommand(command) {
     });
 }
 
+function snapshotBehaviorModes() {
+    return {
+        planMode: config.planMode,
+        askMode: config.askMode,
+        securityMode: config.securityMode,
+        skillCreatorMode: config.skillCreatorMode,
+        deepReviewMode: config.deepReviewMode,
+        goalsPlanningMode: config.goalsPlanningMode,
+        autoAcceptEditsMode: config.autoAcceptEditsMode
+    };
+}
+
+function restoreBehaviorModes(snapshot) {
+    config.planMode = snapshot.planMode;
+    config.askMode = snapshot.askMode;
+    config.securityMode = snapshot.securityMode;
+    config.skillCreatorMode = snapshot.skillCreatorMode;
+    config.deepReviewMode = snapshot.deepReviewMode;
+    config.goalsPlanningMode = snapshot.goalsPlanningMode;
+    config.autoAcceptEditsMode = snapshot.autoAcceptEditsMode;
+    setAutoAcceptEditsMode(config.autoAcceptEditsMode === true);
+}
+
+function refreshProviderRuntime() {
+    const savedMessages = providerInstance?.messages;
+    providerInstance = createProvider();
+    if (savedMessages && providerInstance?.messages !== undefined) {
+        providerInstance.messages = savedMessages;
+    }
+    if (typeof providerInstance?.updateSystemPrompt === 'function') {
+        providerInstance.updateSystemPrompt(getSystemPrompt(config));
+    }
+    attachRuntimeModelSwitchHandler();
+    global.bananaConfig = config;
+}
+
+function applyGoalsPlanningRuntime() {
+    config.goalsPlanningMode = true;
+    config.askMode = false;
+    config.securityMode = false;
+    config.skillCreatorMode = false;
+    config.deepReviewMode = false;
+    refreshProviderRuntime();
+}
+
+function applyGoalsImplementationRuntime() {
+    config.goalsPlanningMode = false;
+    config.askMode = false;
+    config.planMode = false;
+    config.securityMode = false;
+    config.skillCreatorMode = false;
+    config.deepReviewMode = false;
+    refreshProviderRuntime();
+}
+
+function printGoalsPlan(planText) {
+    const width = getTermWidth();
+    const separator = chalk.gray('─'.repeat(width));
+    console.log(chalk.cyan.bold('\nReady to code?\n'));
+    console.log(chalk.cyan(`Here is Banana Code's plan:`));
+    console.log(separator);
+    if (config.useMarkedTerminal) {
+        printMarkdown(planText || '(No plan text was returned.)');
+    } else {
+        console.log(planText || '(No plan text was returned.)');
+    }
+    console.log(separator);
+}
+
+async function promptGoalsApproval(planText) {
+    const { select } = await import('@inquirer/prompts');
+    printGoalsPlan(planText);
+    return await select({
+        message: 'Banana Code has made a plan and is ready to execute. Would you like to proceed?',
+        choices: [
+            {
+                name: 'Implement Plan (auto-accept edits, file reads, web fetches, and searches)',
+                value: 'edits'
+            },
+            {
+                name: 'Implement Plan (also auto-accept commands)',
+                value: 'all'
+            },
+            {
+                name: 'Tell Banana Code what to change',
+                value: 'revise'
+            }
+        ],
+        loop: false
+    });
+}
+
+function normalizePromptInputText(text) {
+    return String(text || '')
+        .replace(/\r\n/g, ' ')
+        .replace(/[\r\n]/g, ' ')
+        .replace(/\t/g, ' ')
+        .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
+}
+
+async function promptGoalsText(message) {
+    while (true) {
+        console.log(chalk.cyan(message));
+        const value = await promptUser();
+        if (value === REPROMPT_SIGNAL) {
+            continue;
+        }
+
+        const normalized = normalizePromptInputText(value).trim();
+        if (normalized) return normalized;
+        console.log(chalk.yellow('Input cannot be empty.'));
+    }
+}
+
+async function runGoals(initialGoal, { runUserTurn }) {
+    let goal = normalizePromptInputText(initialGoal).trim();
+    if (!goal) {
+        goal = await promptGoalsText('What goal should Banana Code plan?');
+    }
+
+    const originalModes = snapshotBehaviorModes();
+    let latestPlan = '';
+
+    try {
+        while (true) {
+            applyGoalsPlanningRuntime();
+            resetCreatedPlan();
+            const planningPrompt = `GOALS MODE: Analyze the user's goal like a normal Banana Code request, but do not implement it yet.
+
+Your job in this phase:
+1. Inspect the codebase or documentation if needed using read/search/fetch tools. Do not narrate this inspection to the user.
+2. If any decision would materially affect implementation, call ask_user_questions and ask all foreseeable blocking questions in one batch. Do not ask questions whose answers can be inferred from the codebase or a safe default.
+3. After the user answers, call create_plan with the final plan text. The plan argument must contain only the implementation plan: scope, files/areas to change, ordered steps, validation commands, and assumptions.
+4. Do not print the implementation plan as normal chat text. Do not ask "Shall I implement this plan?" or any equivalent approval question. Banana Code will show its own approval menu after create_plan.
+5. Do not write files, patch files, rename files, create files, or run shell commands in this phase.
+
+User goal:
+${goal}`;
+
+            const planningResponse = await runUserTurn({
+                text: planningPrompt,
+                source: 'goals',
+                titleSource: `/goals ${goal}`
+            });
+            let createdPlan = getCreatedPlan();
+            if (!createdPlan?.plan) {
+                console.log(chalk.yellow('Goals planning did not receive a create_plan call. Asking the model to submit the plan through the tool...'));
+                const retryResponse = await runUserTurn({
+                    text: `GOALS MODE SYSTEM CORRECTION: You must call create_plan now with the implementation plan only. Do not include conversational preamble, prior analysis, or "Shall I implement this plan?" in the plan text.`,
+                    source: 'goals',
+                    titleSource: `/goals ${goal}`
+                });
+                createdPlan = getCreatedPlan();
+                latestPlan = createdPlan?.plan || retryResponse || planningResponse;
+            } else {
+                latestPlan = createdPlan.plan;
+            }
+
+            const decision = await promptGoalsApproval(latestPlan);
+            if (decision === 'revise') {
+                const revision = await promptGoalsText('What should change in the plan?');
+                goal = `${goal}\n\nThe user reviewed the previous plan and requested this change:\n${revision}\n\nRevise the plan accordingly.`;
+                continue;
+            }
+
+            applyGoalsImplementationRuntime();
+            setGoalsPermissionMode(decision);
+            const permissionSummary = decision === 'all'
+                ? 'Goals permission profile: auto-accept file/web/search actions and shell commands for this approved implementation run.'
+                : 'Goals permission profile: auto-accept file reads, file edits, web fetches, and searches. Shell commands still require explicit user approval.';
+            const implementationPrompt = `GOALS IMPLEMENTATION: The user approved the plan below. Implement it now from start to finish.
+
+${permissionSummary}
+
+Work autonomously: continue through implementation, validation, and reasonable fixes without asking follow-up questions unless a new blocker appears that could not have been asked during planning. Use the approved plan as the source of truth, but adapt if codebase facts require it. Give a concise final summary when done.
+
+Approved plan:
+${latestPlan}
+
+Original goal:
+${initialGoal || goal}`;
+
+            await runUserTurn({
+                text: implementationPrompt,
+                source: 'goals',
+                titleSource: `/goals ${initialGoal || goal}`
+            });
+            break;
+        }
+    } finally {
+        setGoalsPermissionMode(null);
+        restoreBehaviorModes(originalModes);
+        refreshProviderRuntime();
+    }
+}
+
 async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {}) {
     const [cmd, ...args] = command.split(' ');
 
@@ -586,6 +786,7 @@ async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {
                     { name: 'Mistral AI', value: 'mistral' },
                     { name: 'DeepSeek', value: 'deepseek' },
                     { name: 'Kimi AI (Moonshot)', value: 'kimi' },
+                    { name: 'Qwen (Alibaba Cloud)', value: 'qwen' },
                     { name: 'OpenRouter (Any Model)', value: 'openrouter' },
                     { name: 'Ollama Cloud', value: 'ollama_cloud' },
                     { name: 'Ollama (Local)', value: 'ollama' },
@@ -605,7 +806,7 @@ async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {
                 });
             }
 
-            const isDefaultProv = ['gemini', 'claude', 'openai', 'mistral', 'deepseek', 'kimi', 'openrouter', 'ollama_cloud', 'ollama', 'lmstudio'].includes(newProv);
+            const isDefaultProv = ['gemini', 'claude', 'openai', 'mistral', 'deepseek', 'kimi', 'qwen', 'openrouter', 'ollama_cloud', 'ollama', 'lmstudio'].includes(newProv);
             const isPluginProv = pluginRegistry.providers[newProv] !== undefined;
 
             if (isDefaultProv || isPluginProv) {
@@ -615,7 +816,7 @@ async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {
                 providerInstance = createProvider();
                 console.log(chalk.green(`Switched provider to ${newProv} (${config.model}).`));
             } else {
-                console.log(chalk.yellow(`Usage: /provider <gemini|claude|openai|mistral|deepseek|kimi|openrouter|ollama_cloud|ollama|lmstudio>`));
+                console.log(chalk.yellow(`Usage: /provider <gemini|claude|openai|mistral|deepseek|kimi|qwen|openrouter|ollama_cloud|ollama|lmstudio>`));
             }
             break;
         case '/model':
@@ -626,7 +827,7 @@ async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {
             if (!newModel) {
                 // Interactive selection
                 const { select } = await import('@inquirer/prompts');
-                const { GEMINI_MODELS, CLAUDE_MODELS, OPENAI_MODELS, CODEX_MODELS, OLLAMA_CLOUD_MODELS, MISTRAL_MODELS, DEEPSEEK_MODELS, KIMI_MODELS } = await import('./constants.js');
+                const { GEMINI_MODELS, CLAUDE_MODELS, OPENAI_MODELS, CODEX_MODELS, OLLAMA_CLOUD_MODELS, MISTRAL_MODELS, DEEPSEEK_MODELS, KIMI_MODELS, QWEN_MODELS } = await import('./constants.js');
 
                 const AUTO_CHOICE = { name: chalk.cyan('⚡ Auto Mode') + chalk.gray(' (AI picks the best model per prompt)'), value: 'auto' };
                 let choices = [];
@@ -641,6 +842,8 @@ async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {
                     choices = [AUTO_CHOICE, ...DEEPSEEK_MODELS];
                 } else if (activeModelProvider === 'kimi') {
                     choices = [AUTO_CHOICE, ...KIMI_MODELS];
+                } else if (activeModelProvider === 'qwen') {
+                    choices = [AUTO_CHOICE, ...QWEN_MODELS];
                 } else if (activeModelProvider === 'openrouter') {
                     // Re-run setup flow so the user gets full validation
                     config = await setupProvider('openrouter', config);
@@ -685,7 +888,7 @@ async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {
 
                 if (choices.length > 0) {
                     const finalChoices = [...choices];
-                    if (activeModelProvider === 'ollama_cloud' || activeModelProvider === 'mistral' || activeModelProvider === 'deepseek' || activeModelProvider === 'kimi') {
+                    if (activeModelProvider === 'ollama_cloud' || activeModelProvider === 'mistral' || activeModelProvider === 'deepseek' || activeModelProvider === 'kimi' || activeModelProvider === 'qwen') {
                         finalChoices.push({ name: chalk.magenta('✎ Enter custom model ID...'), value: 'CUSTOM_ID' });
                     }
 
@@ -693,7 +896,7 @@ async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {
                         message: 'Select a model:',
                         choices: finalChoices,
                         loop: false,
-                        pageSize: 10
+                        pageSize: activeModelProvider === 'qwen' ? 15 : 10
                     });
 
                     if (newModel === 'CUSTOM_ID') {
@@ -704,7 +907,9 @@ async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {
                                 ? 'mistral-large-latest'
                                 : activeModelProvider === 'kimi'
                                     ? 'kimi-k2.6'
-                                    : 'gemma3:27b-cloud';
+                                    : activeModelProvider === 'qwen'
+                                        ? 'qwen3.6-plus'
+                                        : 'gemma3:27b-cloud';
                         newModel = await input({
                             message: `Enter the exact model ID (e.g., ${exampleModel}):`,
                             validate: (v) => v.trim().length > 0 || 'Model ID cannot be empty'
@@ -1171,11 +1376,16 @@ async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {
                 });
             }
             break;
+        case '/goals':
+            await runGoals(args.join(' '), { runUserTurn });
+            break;
         case '/plan':
             config.planMode = true;
             config.askMode = false;
             config.securityMode = false;
             config.skillCreatorMode = false;
+            config.autoAcceptEditsMode = false;
+            setAutoAcceptEditsMode(false);
             await saveConfig(config);
             if (providerInstance) {
                 const savedMessages = providerInstance.messages;
@@ -1190,6 +1400,8 @@ async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {
             config.askMode = true;
             config.planMode = false;
             config.securityMode = false;
+            config.autoAcceptEditsMode = false;
+            setAutoAcceptEditsMode(false);
             await saveConfig(config);
             if (providerInstance) {
                 const savedMessages = providerInstance.messages;
@@ -1204,6 +1416,8 @@ async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {
             config.securityMode = true;
             config.askMode = false;
             config.planMode = false;
+            config.autoAcceptEditsMode = false;
+            setAutoAcceptEditsMode(false);
             await saveConfig(config);
             if (providerInstance) {
                 const savedMessages = providerInstance.messages;
@@ -1237,6 +1451,8 @@ async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {
             config.askMode = false;
             config.securityMode = false;
             config.skillCreatorMode = false;
+            config.autoAcceptEditsMode = false;
+            setAutoAcceptEditsMode(false);
             await saveConfig(config);
             if (providerInstance) {
                 const savedMessages = providerInstance.messages;
@@ -1500,6 +1716,8 @@ async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {
             config.planMode = false;
             config.askMode = false;
             config.securityMode = false;
+            config.autoAcceptEditsMode = false;
+            setAutoAcceptEditsMode(false);
             await saveConfig(config);
             if (providerInstance) {
                 const savedMessages = providerInstance.messages;
@@ -1516,6 +1734,8 @@ async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {
             config.securityMode = false;
             config.skillCreatorMode = false;
             config.deepReviewMode = false;
+            config.autoAcceptEditsMode = false;
+            setAutoAcceptEditsMode(false);
             await saveConfig(config);
             if (providerInstance) {
                 const savedMessages = providerInstance.messages;
@@ -1702,7 +1922,7 @@ async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {
         case '/help':
             console.log(chalk.yellow(`
 Available commands:
-  /provider <name> - Switch AI provider (gemini, claude, openai, mistral, deepseek, kimi, openrouter, ollama_cloud, ollama)
+  /provider <name> - Switch AI provider (gemini, claude, openai, mistral, deepseek, kimi, qwen, openrouter, ollama_cloud, ollama)
   /model [name]    - Switch model within current provider (opens menu if name omitted)
   /chats           - List persistent chat sessions
   /clear           - Clear chat history
@@ -1721,6 +1941,7 @@ Available commands:
   /memory          - Manage global AI memories
   /init            - Generate a BANANA.md project summary file
   /import-instructions - Merge AGENTS.md/CLAUDE.md/GEMINI.md into BANANA.md
+  /goals [goal]    - Clarify, plan, then approve an autonomous implementation run
   /plan            - Enable Plan Mode (AI proposes a plan for big changes)
   /agent           - Enable Agent Mode (default, AI edits directly)
   /skill-creator   - Enable Skill Creator Mode (AI helps you create custom skills)
@@ -1736,6 +1957,9 @@ Available commands:
   /plugin          - Manage plugins (add, remove, list)
   /help            - Show all commands
   /exit            - Quit Banana Code
+
+Shortcut:
+  Shift+Tab       - Cycle default mode, auto accept edits, and plan mode
 `));
             if (Object.keys(pluginRegistry.commands).length > 0) {
                 console.log(chalk.cyan(`\nPlugin Commands:`));
@@ -1768,12 +1992,74 @@ function getTermWidth() {
 }
 
 function padLine(text, width) {
-    const stripped = text.replace(/\x1b\[[0-9;]*m/g, ''); // strip ANSI for length
+    const stripped = stripAnsi(text);
     const pad = Math.max(0, width - stripped.length);
     return text + ' '.repeat(pad);
 }
 
 let ultrathinkAnimationFrame = 0;
+
+function stripAnsi(text) {
+    return String(text || '').replace(/\x1b\[[0-9;]*m/g, '');
+}
+
+function getPromptCycleMode() {
+    if (config?.planMode) return 'plan';
+    if (config?.autoAcceptEditsMode) return 'autoAcceptEdits';
+    return 'default';
+}
+
+function updateCurrentProviderPrompt() {
+    if (typeof providerInstance?.updateSystemPrompt === 'function') {
+        providerInstance.updateSystemPrompt(getSystemPrompt(config));
+    }
+    if (providerInstance?.config) {
+        providerInstance.config.planMode = config.planMode;
+        providerInstance.config.askMode = config.askMode;
+        providerInstance.config.securityMode = config.securityMode;
+        providerInstance.config.skillCreatorMode = config.skillCreatorMode;
+        providerInstance.config.deepReviewMode = config.deepReviewMode;
+        providerInstance.config.autoAcceptEditsMode = config.autoAcceptEditsMode;
+    }
+    global.bananaConfig = config;
+}
+
+function applyPromptCycleMode(mode) {
+    const nextMode = ['default', 'autoAcceptEdits', 'plan'].includes(mode) ? mode : 'default';
+
+    config.autoAcceptEditsMode = nextMode === 'autoAcceptEdits';
+    config.planMode = nextMode === 'plan';
+
+    if (nextMode !== 'plan') {
+        config.goalsPlanningMode = false;
+    }
+    config.askMode = false;
+    config.securityMode = false;
+    config.skillCreatorMode = false;
+    config.deepReviewMode = false;
+
+    setAutoAcceptEditsMode(config.autoAcceptEditsMode);
+    updateCurrentProviderPrompt();
+}
+
+function cyclePromptMode() {
+    const modes = ['default', 'autoAcceptEdits', 'plan'];
+    const currentIndex = modes.indexOf(getPromptCycleMode());
+    const nextMode = modes[(currentIndex + 1) % modes.length];
+    applyPromptCycleMode(nextMode);
+}
+
+function formatPromptCycleIndicator() {
+    const suffix = chalk.gray(' (shift+tab to cycle)');
+    const mode = getPromptCycleMode();
+    if (mode === 'plan') {
+        return rainbowVoice('⏵⏵ plan mode', ultrathinkAnimationFrame) + suffix;
+    }
+    if (mode === 'autoAcceptEdits') {
+        return chalk.yellow('⏵⏵ auto accept edits on') + suffix;
+    }
+    return chalk.cyan('⏵⏵ default mode') + suffix;
+}
 
 function isUltrathinkRainbowEnabled() {
     try {
@@ -1872,6 +2158,7 @@ let lastPromptRows = 1;
 // boundary — leading to redraws landing above the prompt and leaving stale
 // content (e.g. duplicate ' > ' lines).
 let lastCursorRow = 0;
+const PROMPT_FOOTER_ROWS = 3;
 
 function drawPromptBox(inputText, cursorPos) {
     const width = getTermWidth();
@@ -1914,7 +2201,8 @@ function drawPromptBox(inputText, cursorPos) {
     const modelDisplay = rawModel === 'auto' ? chalk.cyan('[AUTO]') : rawModel;
     const providerDisplay = getActiveProviderId().toUpperCase();
     let modeDisplay = chalk.green('AGENT MODE');
-    if (config.askMode) modeDisplay = chalk.blue('ASK MODE');
+    if (config.goalsPlanningMode) modeDisplay = chalk.cyan('GOALS');
+    else if (config.askMode) modeDisplay = chalk.blue('ASK MODE');
     else if (config.securityMode) modeDisplay = chalk.red('SECURITY MODE');
     else if (config.planMode) modeDisplay = chalk.magenta('PLAN MODE');
     else if (config.skillCreatorMode) modeDisplay = chalk.cyan('SKILL CREATOR MODE');
@@ -1946,13 +2234,16 @@ function drawPromptBox(inputText, cursorPos) {
 
     const yoloDisplay = config.yolo ? chalk.bgRed.white.bold(' YOLO ') : '';
     const leftText = ` Provider: ${chalk.cyan(providerDisplay)} / Model: ${chalk.yellow(modelDisplay)} / ${modeDisplay}${bananaSplitDisplay}${tokenDisplay}${costDisplay}${yoloDisplay ? ' / ' + yoloDisplay : ''}`;
-    const rightText = '/help for shortcuts ';
-    const leftStripped = leftText.replace(/\x1b\[[0-9;]*m/g, '');
-    const midPad = Math.max(0, width - leftStripped.length - rightText.length);
+    const rightText = chalk.gray('/help for shortcuts ');
+    const leftStripped = stripAnsi(leftText);
+    const rightStripped = stripAnsi(rightText);
+    const midPad = Math.max(0, width - leftStripped.length - rightStripped.length);
     const statusLine = chalk.gray(leftText + ' '.repeat(midPad) + rightText);
+    const promptModeLine = ` ${formatPromptCycleIndicator()}`;
     const separator = chalk.gray('─'.repeat(width));
 
     process.stdout.write(statusLine + '\n');
+    process.stdout.write(padLine(promptModeLine, width) + '\n');
     process.stdout.write(separator);
 
     lastPromptRows = rows;
@@ -1961,8 +2252,8 @@ function drawPromptBox(inputText, cursorPos) {
     const targetRow = Math.floor(cursorIndex / width);
     const targetCol = (cursorIndex % width) + 1;
 
-    // Move cursor back up (2 for status/sep + N-1-targetRow for prompt rows)
-    const moveUp = (rows - 1 - targetRow) + 2;
+    // Move cursor back up (footer rows + N-1-targetRow for prompt rows)
+    const moveUp = (rows - 1 - targetRow) + PROMPT_FOOTER_ROWS;
     process.stdout.write(`\x1b[${moveUp}A\x1b[${targetCol}G`);
 
     lastCursorRow = targetRow;
@@ -2001,7 +2292,8 @@ function drawPromptBoxInitial(inputText) {
     const modelDisplay = rawModel === 'auto' ? chalk.cyan('[AUTO]') : rawModel;
     const providerDisplay = getActiveProviderId().toUpperCase();
     let modeDisplay = chalk.green('AGENT MODE');
-    if (config.askMode) modeDisplay = chalk.blue('ASK MODE');
+    if (config.goalsPlanningMode) modeDisplay = chalk.cyan('GOALS');
+    else if (config.askMode) modeDisplay = chalk.blue('ASK MODE');
     else if (config.securityMode) modeDisplay = chalk.red('SECURITY MODE');
     else if (config.planMode) modeDisplay = chalk.magenta('PLAN MODE');
     else if (config.skillCreatorMode) modeDisplay = chalk.cyan('SKILL CREATOR MODE');
@@ -2033,19 +2325,22 @@ function drawPromptBoxInitial(inputText) {
 
     const yoloDisplay = config.yolo ? chalk.bgRed.white.bold(' YOLO ') : '';
     const leftText = ` Provider: ${chalk.cyan(providerDisplay)} / Model: ${chalk.yellow(modelDisplay)} / ${modeDisplay}${bananaSplitDisplay}${tokenDisplay}${costDisplay}${yoloDisplay ? ' / ' + yoloDisplay : ''}`;
-    const rightText = '/help for shortcuts ';
+    const rightText = chalk.gray('/help for shortcuts ');
 
-    const leftStripped = leftText.replace(/\x1b\[[0-9;]*m/g, '');
-    const midPad = Math.max(0, width - leftStripped.length - rightText.length);
+    const leftStripped = stripAnsi(leftText);
+    const rightStripped = stripAnsi(rightText);
+    const midPad = Math.max(0, width - leftStripped.length - rightStripped.length);
     const statusLine = chalk.gray(leftText + ' '.repeat(midPad) + rightText);
+    const promptModeLine = ` ${formatPromptCycleIndicator()}`;
     const separator = chalk.gray('─'.repeat(width));
 
     process.stdout.write(statusLine + '\n');
+    process.stdout.write(padLine(promptModeLine, width) + '\n');
     process.stdout.write(separator);
 
-    // Move cursor back up to content line (up 2 for status/sep + N-1 for wrapping)
+    // Move cursor back up to content line (up footer rows + N-1 for wrapping)
     const targetRow = Math.floor(cursorIndex / width);
-    const moveUp = (rows - 1 - targetRow) + 2;
+    const moveUp = (rows - 1 - targetRow) + PROMPT_FOOTER_ROWS;
     const targetCol = (cursorIndex % width) + 1;
 
     process.stdout.write(`\x1b[${moveUp}A\x1b[${targetCol}G`);
@@ -2076,8 +2371,9 @@ function promptUser() {
         const syncUltrathinkAnimation = () => {
             const shouldAnimateUltrathink = isUltrathinkRainbowEnabled() && /@ultrathink\b/i.test(inputBuffer);
             const shouldAnimateVoice = /(^|[\s([{])\/voice\b/i.test(inputBuffer);
+            const shouldAnimatePromptMode = getPromptCycleMode() === 'plan';
 
-            if (!shouldAnimateUltrathink && !shouldAnimateVoice) {
+            if (!shouldAnimateUltrathink && !shouldAnimateVoice && !shouldAnimatePromptMode) {
                 stopUltrathinkAnimation();
                 return;
             }
@@ -2122,7 +2418,7 @@ function promptUser() {
             const moveDown = (lastPromptRows - 1 - currentRow) + 1;
 
             process.stdout.write(`\x1b[${moveDown}B`); // move to status line
-            for (let i = 0; i < 2; i++) { // clear status and separator
+            for (let i = 0; i < PROMPT_FOOTER_ROWS; i++) { // clear status rows and separator
                 process.stdout.write(`\x1b[2K\x1b[1B`);
             }
             process.stdout.write(`\x1b[1G\n`);   // beginning of line + newline
@@ -2132,13 +2428,21 @@ function promptUser() {
         const handleExit = async () => {
             if (!exitRequested) {
                 exitRequested = true;
-                const moveDown = lastPromptRows + 1; // rough guess
-                process.stdout.write(`\x1b[${moveDown}B\x1b[2K\x1b[1B\x1b[2K\x1b[1G\n`);
+                const moveDown = lastPromptRows + PROMPT_FOOTER_ROWS - 1; // rough guess
+                process.stdout.write(`\x1b[${moveDown}B`);
+                for (let i = 0; i < PROMPT_FOOTER_ROWS; i++) {
+                    process.stdout.write(`\x1b[2K\x1b[1B`);
+                }
+                process.stdout.write('\x1b[1G\n');
                 process.stdout.write(chalk.yellow('(Press CTRL+C or CTRL+D again to exit)\n'));
                 resolve(REPROMPT_SIGNAL);
             } else {
-                const moveDown = lastPromptRows + 1;
-                process.stdout.write(`\x1b[${moveDown}B\x1b[2K\x1b[1B\x1b[2K\x1b[1G\n`);
+                const moveDown = lastPromptRows + PROMPT_FOOTER_ROWS - 1;
+                process.stdout.write(`\x1b[${moveDown}B`);
+                for (let i = 0; i < PROMPT_FOOTER_ROWS; i++) {
+                    process.stdout.write(`\x1b[2K\x1b[1B`);
+                }
+                process.stdout.write('\x1b[1G\n');
                 console.log(chalk.yellow(`\nTo resume this session: node bin/banana.js --resume ${currentSessionId}`));
                 console.log(chalk.yellow("🍌 Bye BananaCode. See ya!"));
                 await saveCurrentSession();
@@ -2179,7 +2483,7 @@ function promptUser() {
                 if (str.includes('\x1b[201~')) {
                     isPasting = false;
                     str = str.slice(0, str.indexOf('\x1b[201~'));
-                    const fullPaste = (pasteBuffer + str).replace(/\r\n/g, ' ').replace(/[\r\n]/g, ' ');
+                    const fullPaste = normalizePromptInputText(pasteBuffer + str);
                     pasteBuffer = '';
                     if (fullPaste.length > 0) {
                         exitRequested = false;
@@ -2272,9 +2576,18 @@ function promptUser() {
                 return;
             }
 
+            if (str === '\x1b[Z') {                             // Shift+Tab
+                exitRequested = false;
+                cyclePromptMode();
+                redrawPrompt();
+                return;
+            }
+
             if (str.startsWith('\x1b')) return;                 // Ignore other escapes
 
             // Regular character
+            str = normalizePromptInputText(str);
+            if (!str) return;
             exitRequested = false;
             inputBuffer = inputBuffer.slice(0, cursorPos) + str + inputBuffer.slice(cursorPos);
             cursorPos += str.length;
@@ -2340,6 +2653,7 @@ async function main() {
             config.yolo = true;
         }
         setYoloMode(config.yolo);
+        setAutoAcceptEditsMode(config.autoAcceptEditsMode === true);
 
         await runStartup();
         await loadPlugins();

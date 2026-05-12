@@ -42,6 +42,7 @@ export async function delegateTask({ task, agentType = 'generalist', contextFile
         const { MistralProvider } = await import('../providers/mistral.js');
         const { DeepSeekProvider } = await import('../providers/deepseek.js');
         const { KimiProvider } = await import('../providers/kimi.js');
+        const { QwenProvider } = await import('../providers/qwen.js');
         const { OllamaProvider } = await import('../providers/ollama.js');
         const { OllamaCloudProvider } = await import('../providers/ollamaCloud.js');
 
@@ -53,6 +54,7 @@ export async function delegateTask({ task, agentType = 'generalist', contextFile
                 case 'mistral': return new MistralProvider(cfg);
                 case 'deepseek': return new DeepSeekProvider(cfg);
                 case 'kimi': return new KimiProvider(cfg);
+                case 'qwen': return new QwenProvider(cfg);
                 case 'ollama_cloud': return new OllamaCloudProvider(cfg);
                 case 'ollama': return new OllamaProvider(cfg);
                 default: return new OllamaProvider(cfg);

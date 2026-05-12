@@ -6,9 +6,31 @@ import chalk from 'chalk';
 import crypto from 'crypto';
 
 const sessionPermissions = new Set();
+const GOALS_COMMAND_ACTIONS = new Set([
+    'Execute Command',
+    'Execute Interactive Command'
+]);
+const GOALS_AUTO_ACTIONS = new Set([
+    'Read File',
+    'Write File',
+    'Patch File',
+    'Rename File',
+    'List Directory',
+    'Search in',
+    'Fetch URL'
+]);
 
 export function setYoloMode(enabled) {
     global.bananaYoloMode = !!enabled;
+}
+
+export function setGoalsPermissionMode(mode = null) {
+    const normalized = mode === 'edits' || mode === 'all' ? mode : null;
+    global.goalsPermissionMode = normalized;
+}
+
+export function setAutoAcceptEditsMode(enabled) {
+    global.bananaAutoAcceptEditsMode = !!enabled;
 }
 
 function wrapText(text, width) {
@@ -65,6 +87,22 @@ export async function requestPermission(actionType, details) {
         return { allowed: true };
     }
 
+    const goalsMode = global.goalsPermissionMode;
+    const autoAcceptEditsMode = global.bananaAutoAcceptEditsMode === true;
+    const isGoalsCommand = GOALS_COMMAND_ACTIONS.has(actionType);
+    if (goalsMode === 'all') {
+        console.log(chalk.green(`🎯 [Goals] Auto-approved: ${chalk.gray(actionType)}`));
+        return { allowed: true };
+    }
+    if (goalsMode === 'edits' && GOALS_AUTO_ACTIONS.has(actionType)) {
+        console.log(chalk.green(`🎯 [Goals] Auto-approved: ${chalk.gray(actionType)}`));
+        return { allowed: true };
+    }
+    if (autoAcceptEditsMode && GOALS_AUTO_ACTIONS.has(actionType)) {
+        console.log(chalk.yellow(`⏵⏵ [Auto Accept Edits] Approved: ${chalk.gray(actionType)}`));
+        return { allowed: true };
+    }
+
     const permKey = `allow_session_${actionType}`;
 
     if (sessionPermissions.has(permKey)) {
@@ -75,7 +113,7 @@ export async function requestPermission(actionType, details) {
     const config = global.bananaConfig;
     const createProvider = global.createProvider;
     
-    if (config && config.useBananaGuard !== false) {
+    if (config && config.useBananaGuard !== false && !((goalsMode === 'edits' || autoAcceptEditsMode) && isGoalsCommand)) {
         // Only commands and URLs get AI scrutiny
         if (actionType === 'Execute Command' || actionType === 'Execute Interactive Command' || actionType === 'Fetch URL') {
             if (createProvider) {

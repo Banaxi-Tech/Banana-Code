@@ -20,6 +20,8 @@ import { bananasplitReview } from './bananasplitReview.js';
 import { renameFile } from './renameFile.js';
 import { generateImage } from './imageGen.js';
 import { requestModelSwitch } from './modelSwitch.js';
+import { askUserQuestions } from './askUserQuestions.js';
+import { createPlan } from './createPlan.js';
 import {
     browserOpen,
     browserSnapshot,
@@ -191,6 +193,76 @@ export const TOOLS = [
                 sessionId: { type: 'string', description: 'The session ID to terminate' }
             },
             required: ['sessionId']
+        }
+    },
+    {
+        name: 'ask_user_questions',
+        label: 'Ask User Questions',
+        description: 'Ask the user one or more structured clarification questions using Banana Code\'s selectable terminal UI. Use only when the answer materially affects implementation or planning; avoid using it for routine confirmations or questions you can reasonably infer.',
+        parameters: {
+            type: 'object',
+            properties: {
+                questions: {
+                    type: 'array',
+                    description: 'Clarifying questions to ask now. Ask all foreseeable blocking questions in one call.',
+                    items: {
+                        type: 'object',
+                        properties: {
+                            header: {
+                                type: 'string',
+                                description: 'Short optional label for the question group, such as Language or Scope.'
+                            },
+                            question: {
+                                type: 'string',
+                                description: 'The exact question to show the user.'
+                            },
+                            options: {
+                                type: 'array',
+                                description: 'Optional selectable answers. Include 2-5 strong choices when possible.',
+                                items: {
+                                    type: 'object',
+                                    properties: {
+                                        label: {
+                                            type: 'string',
+                                            description: 'Short option label.'
+                                        },
+                                        description: {
+                                            type: 'string',
+                                            description: 'One short sentence explaining the option.'
+                                        }
+                                    },
+                                    required: ['label']
+                                }
+                            },
+                            allowCustom: {
+                                type: 'boolean',
+                                description: 'Whether to add a custom free-text answer choice. Defaults to true.'
+                            }
+                        },
+                        required: ['question']
+                    }
+                }
+            },
+            required: ['questions']
+        }
+    },
+    {
+        name: 'create_plan',
+        label: 'Create Plan',
+        description: 'Submit the final Goals implementation plan for Banana Code to show in the Ready to code approval menu. In Goals planning mode, call this exactly once after any needed clarification questions. The plan field must contain only the plan itself, not conversational preamble or approval questions.',
+        parameters: {
+            type: 'object',
+            properties: {
+                title: {
+                    type: 'string',
+                    description: 'Optional short title for the plan.'
+                },
+                plan: {
+                    type: 'string',
+                    description: 'The complete implementation plan text. Include scope, files to change, ordered steps, validation, and assumptions. Do not include phrases like Shall I implement this plan.'
+                }
+            },
+            required: ['plan']
         }
     },
     {
@@ -534,9 +606,28 @@ export function getAvailableTools(config = {}) {
 
     let available = toolDefinitions.filter(tool => {
         if (tool.browserUse && !browserUseAvailable) return false;
+        if (tool.name === 'ask_user_questions' && config.isApiMode) return false;
+        if (tool.name === 'create_plan' && !config.goalsPlanningMode) return false;
         if (tool.name === 'bananasplit_review' && config.bananaSplit?.enabled !== true) return false;
         if (tool.name === 'generate_image' && config.imageGen?.enabled !== true) return false;
         if (tool.name === MODEL_SWITCH_TOOL_NAME && !providerSupportsModelSwitch(config)) return false;
+        if (config.goalsPlanningMode) {
+            const allowedInGoalsPlanning = [
+                'ask_user_questions',
+                'create_plan',
+                'read_file',
+                'read_many_files',
+                'search_files',
+                'list_directory',
+                'fetch_url',
+                'duck_duck_go',
+                'duck_duck_go_scrape',
+                'get_banana_docs',
+                'activate_skill',
+                MODEL_SWITCH_TOOL_NAME
+            ];
+            if (!allowedInGoalsPlanning.includes(tool.name)) return false;
+        }
         if (config.bananaSplitReviewerMode) {
             const allowedForBananaSplitReview = [
                 'read_file', 'read_many_files', 'search_files',
@@ -635,6 +726,8 @@ export async function executeTool(name, args, config) {
         case 'execute_command_in_terminal': return await executeCommandInTerminal(args);
         case 'send_to_terminal': return await sendToTerminal(args);
         case 'terminate_terminal_session': return await terminateTerminalSession(args);
+        case 'ask_user_questions': return await askUserQuestions(args);
+        case 'create_plan': return await createPlan(args);
         case 'get_banana_docs': return await getBananaDocs(args);
         case 'read_file': return await readFile(args);
         case 'read_many_files': return await readManyFiles(args);
