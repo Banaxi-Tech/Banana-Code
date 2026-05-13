@@ -19,7 +19,7 @@ import { TOOLS } from './tools/registry.js';
 import { mcpManager } from './utils/mcp.js';
 import { BrowserBridge } from './utils/browserBridge.js';
 import { extractUltrathinkDirective, isUltrathinkMention, providerSupportsUltrathink } from './utils/ultrathink.js';
-import { GROQ_WHISPER_MODELS, getVoiceConfig, mimeTypeFromFileName, transcribeWithGroq } from './voice.js';
+import { getVoiceConfig, getVoiceProvider, isSupportedVoiceFile, isSupportedVoiceModel, mimeTypeFromFileName, OPENROUTER_TRANSCRIPTION_MODELS, transcribeVoice } from './voice.js';
 import { setRuntimeModelOverride } from './utils/modelSwitch.js';
 
 const PROVIDER_REINIT_KEYS = new Set([
@@ -33,6 +33,7 @@ const PROVIDER_REINIT_KEYS = new Set([
     'bananaSplit',
     'imageGen',
     'browserUse',
+    'github',
     'planMode',
     'askMode',
     'securityMode',
@@ -512,7 +513,7 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
         }
 
         express.raw({
-            type: ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav', 'application/octet-stream'],
+            type: ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav', 'audio/mp4', 'audio/x-m4a', 'audio/flac', 'audio/ogg', 'audio/webm', 'audio/aac', 'application/octet-stream'],
             limit: AUDIO_UPLOAD_LIMIT_BYTES
         })(req, res, next);
     };
@@ -1306,44 +1307,78 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
     app.post('/api/voice', parseVoiceUpload, async (req, res) => {
         try {
             const configuredVoice = getVoiceConfig(config);
-            const groqApiKey = req.headers['x-groq-api-key']
-                || req.body?.groqApiKey
-                || req.query.groqApiKey
-                || configuredVoice.groqApiKey;
-            const model = req.body?.model
-                || req.query.model
-                || configuredVoice.model
-                || 'whisper-large-v3-turbo';
+            const requestedModel = req.body?.model || req.query.model;
+            const requestedProvider = req.body?.voiceProvider
+                || req.body?.transcriptionProvider
+                || req.query.voiceProvider
+                || req.query.transcriptionProvider;
+            let voiceProvider = requestedProvider || getVoiceProvider(configuredVoice);
 
-            if (!groqApiKey) {
-                res.status(400).json({ error: 'Missing Groq API key. Send x-groq-api-key, groqApiKey, or configure voice.groqApiKey.' });
+            if (!requestedProvider && requestedModel && String(requestedModel).startsWith('openai/')) {
+                voiceProvider = 'openrouter';
+            }
+
+            if (!['groq', 'openrouter'].includes(voiceProvider)) {
+                res.status(400).json({ error: 'Unsupported voice provider. Use groq or openrouter.' });
                 return;
             }
 
-            if (!GROQ_WHISPER_MODELS.some(choice => choice.value === model)) {
-                res.status(400).json({ error: 'Unsupported Groq Whisper model. Use whisper-large-v3-turbo or whisper-large-v3.' });
+            const configuredVoiceProvider = getVoiceProvider(configuredVoice);
+            const model = requestedModel
+                || (configuredVoiceProvider === voiceProvider ? configuredVoice.model : null)
+                || (voiceProvider === 'openrouter' ? OPENROUTER_TRANSCRIPTION_MODELS[0].value : 'whisper-large-v3-turbo');
+            const apiKey = voiceProvider === 'openrouter'
+                ? (req.headers['x-openrouter-api-key'] || req.body?.openrouterApiKey || req.query.openrouterApiKey || configuredVoice.openrouterApiKey)
+                : (req.headers['x-groq-api-key'] || req.body?.groqApiKey || req.query.groqApiKey || configuredVoice.groqApiKey);
+
+            if (!apiKey) {
+                const providerName = voiceProvider === 'openrouter' ? 'OpenRouter' : 'Groq';
+                const headerName = voiceProvider === 'openrouter' ? 'x-openrouter-api-key' : 'x-groq-api-key';
+                const configKey = voiceProvider === 'openrouter' ? 'voice.openrouterApiKey' : 'voice.groqApiKey';
+                res.status(400).json({ error: `Missing ${providerName} API key. Send ${headerName} or configure ${configKey}.` });
+                return;
+            }
+
+            if (!isSupportedVoiceModel(voiceProvider, model)) {
+                const message = voiceProvider === 'openrouter'
+                    ? 'Unsupported OpenRouter transcription model. Use openai/gpt-4o-mini-transcribe or openai/gpt-4o-transcribe.'
+                    : 'Unsupported Groq Whisper model. Use whisper-large-v3-turbo or whisper-large-v3.';
+                res.status(400).json({ error: message });
                 return;
             }
 
             const fileBuffer = req.file?.buffer || (Buffer.isBuffer(req.body) ? req.body : null);
             if (!fileBuffer || fileBuffer.length === 0) {
-                res.status(400).json({ error: 'Missing audio file. Upload multipart field "file" or send a raw .mp3/.wav body.' });
+                res.status(400).json({ error: 'Missing audio file. Upload multipart field "file" or send a raw audio body.' });
                 return;
             }
 
             const rawMimeType = String(req.headers['content-type'] || '').split(';')[0];
-            const defaultFileName = rawMimeType === 'audio/mpeg' || rawMimeType === 'audio/mp3' ? 'voice.mp3' : 'voice.wav';
+            const rawExtensionByMimeType = new Map([
+                ['audio/mpeg', 'mp3'],
+                ['audio/mp3', 'mp3'],
+                ['audio/wav', 'wav'],
+                ['audio/x-wav', 'wav'],
+                ['audio/mp4', 'm4a'],
+                ['audio/x-m4a', 'm4a'],
+                ['audio/flac', 'flac'],
+                ['audio/ogg', 'ogg'],
+                ['audio/webm', 'webm'],
+                ['audio/aac', 'aac']
+            ]);
+            const defaultFileName = `voice.${rawExtensionByMimeType.get(rawMimeType) || 'wav'}`;
             const fileName = req.file?.originalname || req.query.filename || defaultFileName;
             const mimeType = req.file?.mimetype || req.headers['content-type'] || mimeTypeFromFileName(fileName);
-            const supportedMime = ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav', 'application/octet-stream'].includes(String(mimeType).split(';')[0]);
-            const supportedName = ['.mp3', '.wav'].includes(path.extname(String(fileName)).toLowerCase());
+            const supportedMime = ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav', 'audio/mp4', 'audio/x-m4a', 'audio/flac', 'audio/ogg', 'audio/webm', 'audio/aac', 'application/octet-stream'].includes(String(mimeType).split(';')[0]);
+            const supportedName = isSupportedVoiceFile(String(fileName));
             if (!supportedMime && !supportedName) {
-                res.status(400).json({ error: 'Only .mp3 and .wav audio uploads are supported.' });
+                res.status(400).json({ error: 'Only .mp3, .wav, .m4a, .flac, .ogg, .webm, or .aac audio uploads are supported.' });
                 return;
             }
 
-            const transcript = await transcribeWithGroq({
-                apiKey: groqApiKey,
+            const transcript = await transcribeVoice({
+                provider: voiceProvider,
+                apiKey,
                 model,
                 fileBuffer,
                 fileName,

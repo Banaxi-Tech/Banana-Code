@@ -5,6 +5,8 @@
 # Environment and Dependencies
 .env
 node_modules/
+*.pem
+*.private-key.pem
 
 # Project Specific
 convert.py

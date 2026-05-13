@@ -12,6 +12,7 @@ Type these into the chat to control the app:
 - /provider   : Switch between AI providers (gemini, claude, openai, deepseek, kimi, qwen, etc.).
 - /model      : Change the model for the current provider (e.g., claude-sonnet-4.6).
 - /clean      : Summarize the current chat history to save tokens and clear "clutter".
+- /copy       : Copy Banana Code's last message to your clipboard.
 - /context    : Show current token usage and context breakdown.
 - /effort     : Set Claude or OpenAI Codex OAuth reasoning effort.
 - /goals      : Clarify requirements, make an implementation plan, then ask before running it with scoped auto-approval.

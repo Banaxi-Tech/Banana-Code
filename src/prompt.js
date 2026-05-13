@@ -68,6 +68,17 @@ You can control the visible Banana Code Studio browser with browser tools. The u
 `;
     }
 
+    if (config.github?.enabled === true) {
+        prompt += `
+
+# GitHub
+GitHub tools are enabled through the user's connected GitHub App installation.
+- Use the specific GitHub tools for common repository, issue, pull request, file, comment, review, and merge tasks.
+- Use \`github_api_request\` only when a specific GitHub REST endpoint is needed and no narrower GitHub tool fits.
+- Mutating GitHub tools will ask the user for approval before posting comments, reviews, merges, or other changes.
+`;
+    }
+
     // Load Project Context (BANANA.md)
     try {
         const bananaPath = path.join(process.cwd(), 'BANANA.md');

@@ -6,6 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
 import crypto, { webcrypto } from 'crypto';
+import fs from 'fs';
 
 if (!globalThis.crypto) {
   globalThis.crypto = webcrypto;
@@ -30,6 +31,13 @@ const MAX_REMOTE_IMAGE_BYTES = 2 * 1024 * 1024;
 const MAX_REMOTE_TOTAL_IMAGE_BYTES = 8 * 1024 * 1024;
 const REMOTE_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 const rateLimits = new Map();
+const GITHUB_CONNECT_TTL_MS = 5 * 60 * 1000;
+const GITHUB_APP_ID = process.env.GITHUB_APP_ID || '3678959';
+const GITHUB_APP_SLUG = process.env.GITHUB_APP_SLUG || process.env.GITHUB_APP_NAME || '';
+const GITHUB_APP_PRIVATE_KEY_PATH = process.env.GITHUB_APP_PRIVATE_KEY_PATH || '';
+const GITHUB_APP_PRIVATE_KEY = process.env.GITHUB_APP_PRIVATE_KEY || '';
+const githubInstallationTokenCache = new Map();
+let githubAppSlugCache = GITHUB_APP_SLUG;
 
 let db;
 
@@ -82,6 +90,32 @@ let db;
         details TEXT,
         status TEXT,
         timestamp INTEGER
+      );
+      CREATE TABLE IF NOT EXISTS github_connect_sessions (
+        state_hash TEXT PRIMARY KEY,
+        poll_token_hash TEXT NOT NULL,
+        client_name TEXT,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        installation_id INTEGER,
+        account_login TEXT,
+        account_type TEXT,
+        connected_at INTEGER
+      );
+      CREATE TABLE IF NOT EXISTS github_installations (
+        installation_id INTEGER PRIMARY KEY,
+        account_login TEXT,
+        account_type TEXT,
+        connected_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS github_integration_tokens (
+        id TEXT PRIMARY KEY,
+        installation_id INTEGER NOT NULL,
+        token_hash TEXT UNIQUE NOT NULL,
+        created_at INTEGER NOT NULL,
+        last_used_at INTEGER,
+        revoked_at INTEGER
       );
     `);
 
@@ -216,6 +250,203 @@ async function authMiddleware(req, res, next) {
   } catch (err) {
     next(err);
   }
+}
+
+function getGitHubPrivateKey() {
+  if (GITHUB_APP_PRIVATE_KEY) {
+    return GITHUB_APP_PRIVATE_KEY.replace(/\\n/g, '\n');
+  }
+  if (GITHUB_APP_PRIVATE_KEY_PATH) {
+    return fs.readFileSync(GITHUB_APP_PRIVATE_KEY_PATH, 'utf8');
+  }
+  return '';
+}
+
+function getGitHubConfigStatus() {
+  const privateKeyAvailable = Boolean(GITHUB_APP_PRIVATE_KEY)
+    || Boolean(GITHUB_APP_PRIVATE_KEY_PATH && fs.existsSync(GITHUB_APP_PRIVATE_KEY_PATH));
+  return {
+    configured: Boolean(GITHUB_APP_ID && privateKeyAvailable),
+    appId: GITHUB_APP_ID,
+    appSlug: githubAppSlugCache || null,
+    privateKeyAvailable
+  };
+}
+
+function requireGitHubConfigured() {
+  const status = getGitHubConfigStatus();
+  if (!status.configured) {
+    const missing = [];
+    if (!GITHUB_APP_ID) missing.push('GITHUB_APP_ID');
+    if (!status.privateKeyAvailable) missing.push('GITHUB_APP_PRIVATE_KEY or GITHUB_APP_PRIVATE_KEY_PATH');
+    const error = new Error(`GitHub App backend is not configured. Missing: ${missing.join(', ')}`);
+    error.status = 503;
+    throw error;
+  }
+}
+
+function base64UrlJson(value) {
+  return Buffer.from(JSON.stringify(value)).toString('base64url');
+}
+
+function createGitHubAppJwt() {
+  requireGitHubConfigured();
+  const now = Math.floor(Date.now() / 1000);
+  const header = base64UrlJson({ alg: 'RS256', typ: 'JWT' });
+  const payload = base64UrlJson({
+    iat: now - 60,
+    exp: now + 9 * 60,
+    iss: GITHUB_APP_ID
+  });
+  const signingInput = `${header}.${payload}`;
+  const signature = crypto
+    .sign('RSA-SHA256', Buffer.from(signingInput), getGitHubPrivateKey())
+    .toString('base64url');
+  return `${signingInput}.${signature}`;
+}
+
+async function githubFetch(path, { method = 'GET', token, body } = {}) {
+  const res = await fetch(`https://api.github.com${path}`, {
+    method,
+    headers: {
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'User-Agent': 'Banana-Code-GitHub-App',
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    },
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+  const text = await res.text();
+  const data = text ? JSON.parse(text) : null;
+  if (!res.ok) {
+    const error = new Error(data?.message || `GitHub API returned ${res.status}`);
+    error.status = res.status;
+    error.data = data;
+    throw error;
+  }
+  return { status: res.status, data };
+}
+
+async function getGitHubAppSlug() {
+  if (githubAppSlugCache) return githubAppSlugCache;
+  const appJwt = createGitHubAppJwt();
+  const response = await githubFetch('/app', { token: appJwt });
+  const slug = response.data?.slug || response.data?.html_url?.split('/apps/')[1];
+  if (!slug) throw new Error('GitHub did not return an App slug.');
+  githubAppSlugCache = slug;
+  return slug;
+}
+
+async function getGitHubInstallationToken(installationId) {
+  const key = String(installationId);
+  const cached = githubInstallationTokenCache.get(key);
+  if (cached && cached.expiresAt > Date.now() + 60 * 1000) {
+    return cached.token;
+  }
+
+  const appJwt = createGitHubAppJwt();
+  const response = await githubFetch(`/app/installations/${encodeURIComponent(key)}/access_tokens`, {
+    method: 'POST',
+    token: appJwt
+  });
+  const token = response.data?.token;
+  const expiresAt = Date.parse(response.data?.expires_at || '') || Date.now() + 50 * 60 * 1000;
+  if (!token) throw new Error('GitHub did not return an installation token.');
+
+  githubInstallationTokenCache.set(key, { token, expiresAt });
+  return token;
+}
+
+async function fetchGitHubInstallation(installationId) {
+  const appJwt = createGitHubAppJwt();
+  const response = await githubFetch(`/app/installations/${encodeURIComponent(String(installationId))}`, {
+    token: appJwt
+  });
+  const account = response.data?.account || {};
+  return {
+    id: Number(response.data?.id || installationId),
+    accountLogin: account.login || '',
+    accountType: account.type || ''
+  };
+}
+
+async function issueGitHubIntegrationToken(installationId) {
+  const token = createOpaqueToken('bgh');
+  await db.run(
+    'INSERT INTO github_integration_tokens (id, installation_id, token_hash, created_at, last_used_at) VALUES (?, ?, ?, ?, ?)',
+    uuidv4(),
+    installationId,
+    sha256(token),
+    Date.now(),
+    Date.now()
+  );
+  return token;
+}
+
+async function authenticateGitHubIntegrationToken(token) {
+  if (!token || typeof token !== 'string') return null;
+  const row = await db.get(
+    `SELECT t.id, t.installation_id, i.account_login, i.account_type
+     FROM github_integration_tokens t
+     LEFT JOIN github_installations i ON i.installation_id = t.installation_id
+     WHERE t.token_hash = ? AND t.revoked_at IS NULL`,
+    sha256(token)
+  );
+  if (!row) return null;
+  await db.run('UPDATE github_integration_tokens SET last_used_at = ? WHERE id = ?', Date.now(), row.id);
+  return row;
+}
+
+async function githubIntegrationAuthMiddleware(req, res, next) {
+  try {
+    const header = req.get('authorization') || '';
+    const match = header.match(/^Bearer\s+(.+)$/i);
+    if (!match) return res.status(401).json({ error: 'Missing GitHub integration bearer token' });
+
+    const auth = await authenticateGitHubIntegrationToken(match[1]);
+    if (!auth) return res.status(401).json({ error: 'Invalid GitHub integration token' });
+
+    req.githubAuth = auth;
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
+
+function normalizeGitHubRestPath(rawPath) {
+  if (typeof rawPath !== 'string' || !rawPath.startsWith('/')) {
+    throw new Error('GitHub API path must start with /.');
+  }
+  if (rawPath.startsWith('//') || rawPath.includes('://') || rawPath.includes('..')) {
+    throw new Error('GitHub API path is not allowed.');
+  }
+
+  const parsed = new URL(rawPath, 'https://api.github.com');
+  const path = `${parsed.pathname}${parsed.search}`;
+  const allowed = path === '/installation/repositories'
+    || path.startsWith('/installation/repositories?')
+    || path.startsWith('/repos/');
+  if (!allowed) {
+    throw new Error('GitHub API path must be /installation/repositories or begin with /repos/.');
+  }
+  return path;
+}
+
+function normalizeGitHubMethod(method) {
+  const normalized = String(method || 'GET').trim().toUpperCase();
+  if (!['GET', 'POST', 'PATCH', 'PUT', 'DELETE'].includes(normalized)) {
+    throw new Error('Unsupported GitHub API method.');
+  }
+  return normalized;
+}
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function rateLimit(name, maxHits, windowMs) {
@@ -483,9 +714,145 @@ app.get('/api/remote/tools/:uuid', authMiddleware, asyncHandler(async (req, res)
   res.json(tools);
 }));
 
+app.get('/api/github/health', (req, res) => {
+  const status = getGitHubConfigStatus();
+  res.json({
+    status: status.configured ? 'ok' : 'not_configured',
+    appId: status.appId,
+    appSlug: status.appSlug,
+    privateKeyAvailable: status.privateKeyAvailable
+  });
+});
+
+app.post('/api/github/connect/start', rateLimit('github-connect-start', 30, 15 * 60 * 1000), asyncHandler(async (req, res) => {
+  requireGitHubConfigured();
+
+  const state = createOpaqueToken('bghs');
+  const pollToken = createOpaqueToken('bghp');
+  const now = Date.now();
+  const clientName = String(req.body?.clientName || '').slice(0, 120);
+
+  await db.run(
+    'INSERT INTO github_connect_sessions (state_hash, poll_token_hash, client_name, created_at, expires_at) VALUES (?, ?, ?, ?, ?)',
+    sha256(state),
+    sha256(pollToken),
+    clientName,
+    now,
+    now + GITHUB_CONNECT_TTL_MS
+  );
+
+  const appSlug = await getGitHubAppSlug();
+  const installUrl = `https://github.com/apps/${encodeURIComponent(appSlug)}/installations/new?state=${encodeURIComponent(state)}`;
+  res.json({ state, pollToken, installUrl, expiresAt: now + GITHUB_CONNECT_TTL_MS });
+}));
+
+app.get('/api/github/connect/callback', rateLimit('github-connect-callback', 60, 15 * 60 * 1000), asyncHandler(async (req, res) => {
+  requireGitHubConfigured();
+
+  const state = String(req.query.state || '');
+  const installationId = Number(req.query.installation_id || 0);
+  if (!state || !Number.isInteger(installationId) || installationId <= 0) {
+    return res.status(400).send('Missing GitHub installation data.');
+  }
+
+  const stateHash = sha256(state);
+  const session = await db.get('SELECT state_hash, expires_at, connected_at FROM github_connect_sessions WHERE state_hash = ?', stateHash);
+  if (!session || session.expires_at < Date.now()) {
+    return res.status(400).send('This GitHub connection session is expired. Return to Banana Code and run /github again.');
+  }
+
+  const installation = await fetchGitHubInstallation(installationId);
+  const now = Date.now();
+  await db.run(
+    `INSERT INTO github_installations (installation_id, account_login, account_type, connected_at, updated_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(installation_id) DO UPDATE SET
+       account_login = excluded.account_login,
+       account_type = excluded.account_type,
+       updated_at = excluded.updated_at`,
+    installation.id,
+    installation.accountLogin,
+    installation.accountType,
+    now,
+    now
+  );
+  await db.run(
+    `UPDATE github_connect_sessions
+     SET installation_id = ?, account_login = ?, account_type = ?, connected_at = ?
+     WHERE state_hash = ?`,
+    installation.id,
+    installation.accountLogin,
+    installation.accountType,
+    now,
+    stateHash
+  );
+
+  res.type('html').send(`<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Banana Code GitHub Connected</title></head>
+<body style="font-family: system-ui, sans-serif; max-width: 680px; margin: 48px auto; line-height: 1.5;">
+  <h1>GitHub connected</h1>
+  <p>Banana Code is connected to <strong>${escapeHtml(installation.accountLogin)}</strong>. You can close this tab and return to the terminal.</p>
+</body>
+</html>`);
+}));
+
+app.get('/api/github/connect/poll', rateLimit('github-connect-poll', 300, 15 * 60 * 1000), asyncHandler(async (req, res) => {
+  const state = String(req.query.state || '');
+  const pollToken = String(req.get('X-Banana-GitHub-Poll-Token') || '');
+  if (!state || !pollToken) return res.status(400).json({ error: 'Missing state or poll token' });
+
+  const row = await db.get(
+    'SELECT * FROM github_connect_sessions WHERE state_hash = ? AND poll_token_hash = ?',
+    sha256(state),
+    sha256(pollToken)
+  );
+  if (!row || row.expires_at < Date.now()) {
+    return res.status(404).json({ error: 'GitHub connection session expired or not found' });
+  }
+  if (!row.installation_id || !row.connected_at) {
+    return res.status(202).json({ pending: true });
+  }
+
+  const token = await issueGitHubIntegrationToken(row.installation_id);
+  await db.run('DELETE FROM github_connect_sessions WHERE state_hash = ?', row.state_hash);
+  res.json({
+    token,
+    installation: {
+      id: row.installation_id,
+      accountLogin: row.account_login,
+      accountType: row.account_type
+    }
+  });
+}));
+
+app.get('/api/github/installation', githubIntegrationAuthMiddleware, asyncHandler(async (req, res) => {
+  res.json({
+    installation: {
+      id: req.githubAuth.installation_id,
+      accountLogin: req.githubAuth.account_login,
+      accountType: req.githubAuth.account_type
+    }
+  });
+}));
+
+app.delete('/api/github/token', githubIntegrationAuthMiddleware, asyncHandler(async (req, res) => {
+  await db.run('UPDATE github_integration_tokens SET revoked_at = ? WHERE id = ?', Date.now(), req.githubAuth.id);
+  res.json({ ok: true });
+}));
+
+app.post('/api/github/rest', githubIntegrationAuthMiddleware, rateLimit('github-rest', 600, 15 * 60 * 1000), asyncHandler(async (req, res) => {
+  const method = normalizeGitHubMethod(req.body?.method);
+  const path = normalizeGitHubRestPath(req.body?.path);
+  const body = req.body?.body === undefined ? undefined : req.body.body;
+  const token = await getGitHubInstallationToken(req.githubAuth.installation_id);
+  const response = await githubFetch(path, { method, token, body });
+  res.status(response.status).json(response);
+}));
+
 app.use((err, req, res, next) => {
   console.error('[API Error]:', err);
-  res.status(500).json({ error: 'Internal Server Error' });
+  res.status(err.status || 500).json({ error: err.status ? err.message : 'Internal Server Error' });
 });
 
 async function authenticateSocketJoin(socket, role, token) {

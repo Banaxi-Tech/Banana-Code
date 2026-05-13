@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Banaxi
 
 import readline from 'readline';
+import { spawn } from 'child_process';
 import chalk from 'chalk';
 import ora from 'ora';
 import { confirmProjectLocalSettingsTrust, getBananaSplitLocalConfig, loadConfig, saveConfig, setupBananaSplit, setupImageGen, setupProvider } from './config.js';
@@ -32,8 +33,9 @@ import { loadPlugins, pluginRegistry, installPlugin, removePlugin, getConfigured
 import { REMOTE_IMAGE_LIMITS, connectRemoteTooling, disconnectRemoteTooling, finalizeTurn, publishRemoteCapabilities, redeemRemotePairingCode, resetRemoteAiResponseTracking, sendRemoteAiMessage, sendRemoteUserMessageError, sendRemoteUserMessageStatus } from './remote.js';
 import { promptToMergeExternalAgentInstructions } from './utils/projectInstructions.js';
 import { extractUltrathinkDirective, isUltrathinkMention, providerSupportsUltrathink, rainbowUltrathink, rainbowVoice, styleUltrathinkMentions, styleVoiceCommands } from './utils/ultrathink.js';
-import { cleanupVoiceClip, getVoiceConfig, hasUsableVoiceConfig, isSupportedVoiceFile, recordVoiceClip, setupVoiceConfig, transcribeWithGroq } from './voice.js';
+import { cleanupVoiceClip, getVoiceApiKey, getVoiceConfig, getVoiceProvider, getVoiceProviderLabel, hasUsableVoiceConfig, isSupportedVoiceFile, recordVoiceClip, setupVoiceConfig, transcribeVoice } from './voice.js';
 import { setRuntimeModelOverride } from './utils/modelSwitch.js';
+import { disconnectGitHubIntegration, setupGitHubIntegration, showGitHubStatus } from './github.js';
 
 let config;
 let providerInstance;
@@ -50,6 +52,7 @@ const commandHistory = [];
 let historyIndex = -1;
 let currentInputSaved = '';
 let activePromptInterrupt = null;
+let lastAssistantMessageText = '';
 
 function createProvider(overrideConfig = null) {
     const activeConfig = overrideConfig || getBananaSplitLocalConfig(config);
@@ -103,6 +106,103 @@ function replaceProviderForCurrentConfig({ preservePortableHistory = false } = {
     ) {
         providerInstance.messages = savedMessages;
     }
+}
+
+function textFromMessageContent(content) {
+    if (typeof content === 'string') return content;
+    if (!Array.isArray(content)) return '';
+
+    return content.map(part => {
+        if (typeof part === 'string') return part;
+        if (!part || typeof part !== 'object') return '';
+        if (typeof part.text === 'string') return part.text;
+        if (typeof part.content === 'string') return part.content;
+        if (Array.isArray(part.content)) return textFromMessageContent(part.content);
+        return '';
+    }).filter(Boolean).join('\n');
+}
+
+function textFromAssistantMessage(message) {
+    if (!message || typeof message !== 'object') return '';
+    if (Array.isArray(message.parts)) {
+        return message.parts.map(part => part?.text || '').filter(Boolean).join('\n');
+    }
+    return textFromMessageContent(message.content);
+}
+
+function getLastAssistantMessageText(messages = providerInstance?.messages) {
+    if (messages === providerInstance?.messages && lastAssistantMessageText.trim()) return lastAssistantMessageText;
+    if (!Array.isArray(messages)) return '';
+
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const msg = messages[i];
+        if (!['assistant', 'model', 'output_text'].includes(msg?.role)) continue;
+        const text = textFromAssistantMessage(msg);
+        if (text.trim()) return text;
+    }
+    return '';
+}
+
+function getClipboardCommands() {
+    if (process.platform === 'darwin') {
+        return [{ command: 'pbcopy', args: [] }];
+    }
+    if (process.platform === 'win32') {
+        return [{ command: 'clip.exe', args: [] }];
+    }
+    return [
+        { command: 'wl-copy', args: [] },
+        { command: 'xclip', args: ['-selection', 'clipboard'] },
+        { command: 'xsel', args: ['--clipboard', '--input'] },
+        { command: 'clip.exe', args: [] }
+    ];
+}
+
+function copyTextWithCommand(text, { command, args }) {
+    return new Promise((resolve, reject) => {
+        const child = spawn(command, args, { stdio: ['pipe', 'ignore', 'pipe'] });
+        let stderr = '';
+        let settled = false;
+        const timeout = setTimeout(() => {
+            child.kill();
+            if (!settled) {
+                settled = true;
+                reject(new Error(`${command} timed out`));
+            }
+        }, 5000);
+
+        child.stderr.on('data', chunk => {
+            stderr += chunk.toString();
+        });
+        child.on('error', err => {
+            clearTimeout(timeout);
+            if (!settled) {
+                settled = true;
+                reject(err);
+            }
+        });
+        child.on('close', code => {
+            clearTimeout(timeout);
+            if (settled) return;
+            settled = true;
+            if (code === 0) resolve();
+            else reject(new Error(stderr.trim() || `${command} exited with code ${code}`));
+        });
+        child.stdin.end(text);
+    });
+}
+
+async function copyTextToClipboard(text) {
+    const errors = [];
+    for (const clipboardCommand of getClipboardCommands()) {
+        try {
+            await copyTextWithCommand(text, clipboardCommand);
+            return clipboardCommand.command;
+        } catch (err) {
+            errors.push(`${clipboardCommand.command}: ${err.message}`);
+        }
+    }
+    throw new Error(errors.join('; '));
 }
 
 async function requestModelSwitchFromCli({ currentModel, recommendedModel, reason }) {
@@ -485,6 +585,12 @@ async function sendPromptToAi(finalInput, { attachedImages = [], ultrathinkEnabl
         }
     }
 
+    if (typeof responseText === 'string' && responseText.trim()) {
+        lastAssistantMessageText = responseText;
+    } else {
+        lastAssistantMessageText = getLastAssistantMessageText();
+    }
+
     sendRemoteAiMessage(responseText);
     finalizeTurn();
     resetRemoteAiResponseTracking();
@@ -814,11 +920,28 @@ async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {
                 config = await setupProvider(newProv, config);
                 await saveConfig(config);
                 providerInstance = createProvider();
+                lastAssistantMessageText = '';
                 console.log(chalk.green(`Switched provider to ${newProv} (${config.model}).`));
             } else {
                 console.log(chalk.yellow(`Usage: /provider <gemini|claude|openai|mistral|deepseek|kimi|qwen|openrouter|ollama_cloud|ollama|lmstudio>`));
             }
             break;
+        case '/copy': {
+            const text = getLastAssistantMessageText();
+            if (!text.trim()) {
+                console.log(chalk.yellow('No Banana Code message found to copy yet.'));
+                break;
+            }
+
+            try {
+                const commandUsed = await copyTextToClipboard(text);
+                console.log(chalk.green(`Copied Banana Code's last message to the clipboard.`) + chalk.gray(` (${commandUsed})`));
+            } catch (err) {
+                console.log(chalk.red(`Failed to copy to clipboard: ${err.message}`));
+                console.log(chalk.gray('Install a clipboard tool such as wl-copy, xclip, or xsel, then try /copy again.'));
+            }
+            break;
+        }
         case '/model':
             let newModel = args[0];
             const isBananaSplitModelChange = config.bananaSplit?.enabled && config.bananaSplit.local?.provider;
@@ -1003,12 +1126,41 @@ async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {
                 console.log(chalk.cyan(`Remote tooling securely paired with account: ${result.uuid}`));
             }
             break;
+        case '/github': {
+            const action = String(args[0] || '').toLowerCase();
+            try {
+                if (action === 'disconnect' || action === 'logout') {
+                    config = await disconnectGitHubIntegration(config);
+                    await saveConfig(config);
+                    refreshProviderRuntime();
+                    break;
+                }
+
+                if (action === 'status') {
+                    await showGitHubStatus(config);
+                    break;
+                }
+
+                if (action && !['setup', 'connect', 'reconnect'].includes(action)) {
+                    console.log(chalk.yellow('Usage: /github [connect|reconnect|status|disconnect]'));
+                    break;
+                }
+
+                config = await setupGitHubIntegration(config);
+                await saveConfig(config);
+                refreshProviderRuntime();
+                console.log(chalk.cyan('GitHub tools are now available to the AI in this session.'));
+            } catch (err) {
+                console.log(chalk.red(`GitHub setup failed: ${err.message}`));
+            }
+            break;
+        }
         case '/voice': {
             if (args[0] === 'setup' || !hasUsableVoiceConfig(config)) {
                 config = await setupVoiceConfig(config);
                 await saveConfig(config);
                 if (args[0] === 'setup') {
-                    console.log(chalk.green(`Voice input configured for ${config.voice.model}.`));
+                    console.log(chalk.green(`Voice input configured for ${getVoiceProviderLabel(getVoiceProvider(config.voice))} ${config.voice.model}.`));
                     break;
                 }
             }
@@ -1030,7 +1182,7 @@ async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {
                     }
                     audioPath = path.resolve(path.isAbsolute(cleanedPath) ? cleanedPath : path.join(process.cwd(), cleanedPath));
                     if (!isSupportedVoiceFile(audioPath)) {
-                        console.log(chalk.yellow('Voice input accepts .mp3 or .wav files.'));
+                        console.log(chalk.yellow('Voice input accepts .mp3, .wav, .m4a, .flac, .ogg, .webm, or .aac files.'));
                         break;
                     }
                 } else {
@@ -1040,11 +1192,14 @@ async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {
                 }
 
                 const voice = getVoiceConfig(config);
-                const spinner = ora({ text: `Transcribing with Groq ${voice.model}...`, color: 'yellow', stream: process.stdout }).start();
+                const provider = getVoiceProvider(voice);
+                const providerLabel = getVoiceProviderLabel(provider);
+                const spinner = ora({ text: `Transcribing with ${providerLabel} ${voice.model}...`, color: 'yellow', stream: process.stdout }).start();
                 let transcript;
                 try {
-                    transcript = await transcribeWithGroq({
-                        apiKey: voice.groqApiKey,
+                    transcript = await transcribeVoice({
+                        provider,
+                        apiKey: getVoiceApiKey(voice),
                         model: voice.model,
                         filePath: audioPath
                     });
@@ -1065,6 +1220,7 @@ async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {
         }
         case '/clear':
             providerInstance = createProvider(); // fresh instance = clear history
+            lastAssistantMessageText = '';
             console.log(chalk.green('Chat history cleared.'));
             break;
         case '/clean':
@@ -1780,6 +1936,7 @@ async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {
                         if (providerInstance.messages !== undefined) {
                             providerInstance.messages = session.messages;
                         }
+                        lastAssistantMessageText = getLastAssistantMessageText(session.messages);
                         playHistory(session);
                         console.log(chalk.green(`Resumed session: ${currentSessionTitle || currentSessionId} (${session.provider}/${session.model})\n`));
                     }
@@ -1927,12 +2084,16 @@ Available commands:
   /chats           - List persistent chat sessions
   /clear           - Clear chat history
   /clean           - Compress chat history into a summary to save tokens
-  /voice           - Record speech, transcribe with Groq Whisper, then ask the AI
-  /voice setup     - Configure Groq API key and Whisper model
-  /voice <file>    - Transcribe a .mp3/.wav file and ask the AI
+  /copy            - Copy Banana Code's last message to your clipboard
+  /voice           - Record speech, transcribe with the configured voice provider, then ask the AI
+  /voice setup     - Configure Groq or OpenRouter transcription
+  /voice <file>    - Transcribe an audio file and ask the AI
   /remotetooling   - Securely pair with Mobile App for remote approvals
   /remotetooling migrate - Replace old UUID-only pairing with secure pairing
   /remotetooling disconnect - Disconnect Mobile App remote approvals
+  /github          - Connect a GitHub App installation and enable GitHub tools
+  /github status   - Check the active GitHub connection
+  /github disconnect - Disable GitHub tools and revoke the local integration token
   /context         - Show current context window size
   /permissions     - List session-approved permissions
   /beta            - Manage beta features and tools
@@ -2699,6 +2860,7 @@ async function main() {
                     if (providerInstance.messages !== undefined) {
                         providerInstance.messages = session.messages;
                     }
+                    lastAssistantMessageText = getLastAssistantMessageText(session.messages);
                     playHistory(session);
                     console.log(chalk.green(`Resumed session: ${currentSessionTitle || currentSessionId} (${session.provider}/${session.model})\n`));
                 } else {
