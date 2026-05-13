@@ -19,6 +19,12 @@ const GOALS_AUTO_ACTIONS = new Set([
     'Search in',
     'Fetch URL'
 ]);
+const SENSITIVE_REMOTE_ACTIONS = new Set([
+    'GitHub API Request',
+    'GitHub Comment',
+    'GitHub PR Review',
+    'GitHub Merge Pull Request'
+]);
 
 export function setYoloMode(enabled) {
     global.bananaYoloMode = !!enabled;
@@ -90,15 +96,16 @@ export async function requestPermission(actionType, details) {
     const goalsMode = global.goalsPermissionMode;
     const autoAcceptEditsMode = global.bananaAutoAcceptEditsMode === true;
     const isGoalsCommand = GOALS_COMMAND_ACTIONS.has(actionType);
-    if (goalsMode === 'all') {
+    const isSensitiveRemoteAction = SENSITIVE_REMOTE_ACTIONS.has(actionType);
+    if (!isSensitiveRemoteAction && goalsMode === 'all') {
         console.log(chalk.green(`🎯 [Goals] Auto-approved: ${chalk.gray(actionType)}`));
         return { allowed: true };
     }
-    if (goalsMode === 'edits' && GOALS_AUTO_ACTIONS.has(actionType)) {
+    if (!isSensitiveRemoteAction && goalsMode === 'edits' && GOALS_AUTO_ACTIONS.has(actionType)) {
         console.log(chalk.green(`🎯 [Goals] Auto-approved: ${chalk.gray(actionType)}`));
         return { allowed: true };
     }
-    if (autoAcceptEditsMode && GOALS_AUTO_ACTIONS.has(actionType)) {
+    if (!isSensitiveRemoteAction && autoAcceptEditsMode && GOALS_AUTO_ACTIONS.has(actionType)) {
         console.log(chalk.yellow(`⏵⏵ [Auto Accept Edits] Approved: ${chalk.gray(actionType)}`));
         return { allowed: true };
     }
@@ -113,7 +120,7 @@ export async function requestPermission(actionType, details) {
     const config = global.bananaConfig;
     const createProvider = global.createProvider;
     
-    if (config && config.useBananaGuard !== false && !((goalsMode === 'edits' || autoAcceptEditsMode) && isGoalsCommand)) {
+    if (config && config.useBananaGuard !== false && !isSensitiveRemoteAction && !((goalsMode === 'edits' || autoAcceptEditsMode) && isGoalsCommand)) {
         // Only commands and URLs get AI scrutiny
         if (actionType === 'Execute Command' || actionType === 'Execute Interactive Command' || actionType === 'Fetch URL') {
             if (createProvider) {

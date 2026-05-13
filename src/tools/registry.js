@@ -23,6 +23,16 @@ import { requestModelSwitch } from './modelSwitch.js';
 import { askUserQuestions } from './askUserQuestions.js';
 import { createPlan } from './createPlan.js';
 import {
+    githubApiRequest,
+    githubListRepositories,
+    githubGetIssue,
+    githubGetPullRequest,
+    githubGetFile,
+    githubAddIssueComment,
+    githubCreatePullRequestReview,
+    githubMergePullRequest
+} from './github.js';
+import {
     browserOpen,
     browserSnapshot,
     browserClick,
@@ -146,6 +156,17 @@ const BROWSER_TOOLS = [
         parameters: { type: 'object', properties: {}, required: [] }
     }
 ];
+
+const GITHUB_TOOL_NAMES = new Set([
+    'github_api_request',
+    'github_list_repositories',
+    'github_get_issue',
+    'github_get_pull_request',
+    'github_get_file',
+    'github_add_issue_comment',
+    'github_create_pull_request_review',
+    'github_merge_pull_request'
+]);
 
 export const TOOLS = [
     {
@@ -578,6 +599,138 @@ export const TOOLS = [
         }
     },
     {
+        name: 'github_list_repositories',
+        label: 'GitHub List Repositories',
+        description: 'List repositories available to the connected GitHub App installation.',
+        parameters: {
+            type: 'object',
+            properties: {},
+            required: []
+        }
+    },
+    {
+        name: 'github_get_issue',
+        label: 'GitHub Get Issue',
+        description: 'Read a GitHub issue, including PR issue metadata when the number belongs to a pull request.',
+        parameters: {
+            type: 'object',
+            properties: {
+                owner: { type: 'string', description: 'Repository owner or organization.' },
+                repo: { type: 'string', description: 'Repository name.' },
+                issueNumber: { type: 'integer', description: 'Issue number.' }
+            },
+            required: ['owner', 'repo', 'issueNumber']
+        }
+    },
+    {
+        name: 'github_get_pull_request',
+        label: 'GitHub Get Pull Request',
+        description: 'Read GitHub pull request metadata.',
+        parameters: {
+            type: 'object',
+            properties: {
+                owner: { type: 'string', description: 'Repository owner or organization.' },
+                repo: { type: 'string', description: 'Repository name.' },
+                pullNumber: { type: 'integer', description: 'Pull request number.' }
+            },
+            required: ['owner', 'repo', 'pullNumber']
+        }
+    },
+    {
+        name: 'github_get_file',
+        label: 'GitHub Get File',
+        description: 'Read a file or directory listing from a repository using the connected GitHub App installation.',
+        parameters: {
+            type: 'object',
+            properties: {
+                owner: { type: 'string', description: 'Repository owner or organization.' },
+                repo: { type: 'string', description: 'Repository name.' },
+                path: { type: 'string', description: 'Repository file path.' },
+                ref: { type: 'string', description: 'Optional branch, tag, or commit SHA.' }
+            },
+            required: ['owner', 'repo', 'path']
+        }
+    },
+    {
+        name: 'github_add_issue_comment',
+        label: 'GitHub Add Issue/PR Comment',
+        description: 'Add a top-level comment to a GitHub issue or pull request. Requires user approval before posting.',
+        parameters: {
+            type: 'object',
+            properties: {
+                owner: { type: 'string', description: 'Repository owner or organization.' },
+                repo: { type: 'string', description: 'Repository name.' },
+                issueNumber: { type: 'integer', description: 'Issue or pull request number.' },
+                body: { type: 'string', description: 'Markdown comment body.' }
+            },
+            required: ['owner', 'repo', 'issueNumber', 'body']
+        }
+    },
+    {
+        name: 'github_create_pull_request_review',
+        label: 'GitHub Create PR Review',
+        description: 'Create a pull request review with COMMENT, APPROVE, or REQUEST_CHANGES. Requires user approval before submitting.',
+        parameters: {
+            type: 'object',
+            properties: {
+                owner: { type: 'string', description: 'Repository owner or organization.' },
+                repo: { type: 'string', description: 'Repository name.' },
+                pullNumber: { type: 'integer', description: 'Pull request number.' },
+                event: { type: 'string', enum: ['COMMENT', 'APPROVE', 'REQUEST_CHANGES'], description: 'Review action.' },
+                body: { type: 'string', description: 'Review body.' },
+                comments: {
+                    type: 'array',
+                    description: 'Optional inline comments using GitHub REST review comment fields.',
+                    items: {
+                        type: 'object',
+                        properties: {
+                            path: { type: 'string' },
+                            position: { type: 'integer' },
+                            line: { type: 'integer' },
+                            side: { type: 'string' },
+                            start_line: { type: 'integer' },
+                            start_side: { type: 'string' },
+                            body: { type: 'string' }
+                        },
+                        required: ['path', 'body']
+                    }
+                }
+            },
+            required: ['owner', 'repo', 'pullNumber']
+        }
+    },
+    {
+        name: 'github_merge_pull_request',
+        label: 'GitHub Merge PR',
+        description: 'Merge a GitHub pull request with merge, squash, or rebase. Requires user approval before merging.',
+        parameters: {
+            type: 'object',
+            properties: {
+                owner: { type: 'string', description: 'Repository owner or organization.' },
+                repo: { type: 'string', description: 'Repository name.' },
+                pullNumber: { type: 'integer', description: 'Pull request number.' },
+                mergeMethod: { type: 'string', enum: ['merge', 'squash', 'rebase'], description: 'Merge method. Defaults to merge.' },
+                commitTitle: { type: 'string', description: 'Optional merge commit title.' },
+                commitMessage: { type: 'string', description: 'Optional merge commit message.' }
+            },
+            required: ['owner', 'repo', 'pullNumber']
+        }
+    },
+    {
+        name: 'github_api_request',
+        label: 'GitHub REST API Request',
+        description: 'Make an authenticated GitHub REST API request scoped to the connected GitHub App installation. Use exact API paths like /repos/owner/repo/issues/1/comments. Mutating methods require user approval.',
+        parameters: {
+            type: 'object',
+            properties: {
+                method: { type: 'string', enum: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'], description: 'HTTP method. Defaults to GET.' },
+                path: { type: 'string', description: 'GitHub REST API path beginning with /repos/ or /installation/repositories.' },
+                body: { type: 'object', description: 'Optional JSON request body.' }
+            },
+            required: ['path']
+        }
+    },
+    {
         name: MODEL_SWITCH_TOOL_NAME,
         label: 'Request Model Switch',
         description: 'Recommend switching to another model for the current provider. This pauses for user approval before switching; if declined, continue with the current model.',
@@ -606,6 +759,7 @@ export function getAvailableTools(config = {}) {
 
     let available = toolDefinitions.filter(tool => {
         if (tool.browserUse && !browserUseAvailable) return false;
+        if (GITHUB_TOOL_NAMES.has(tool.name) && config.github?.enabled !== true) return false;
         if (tool.name === 'ask_user_questions' && config.isApiMode) return false;
         if (tool.name === 'create_plan' && !config.goalsPlanningMode) return false;
         if (tool.name === 'bananasplit_review' && config.bananaSplit?.enabled !== true) return false;
@@ -624,6 +778,10 @@ export function getAvailableTools(config = {}) {
                 'duck_duck_go_scrape',
                 'get_banana_docs',
                 'activate_skill',
+                'github_list_repositories',
+                'github_get_issue',
+                'github_get_pull_request',
+                'github_get_file',
                 MODEL_SWITCH_TOOL_NAME
             ];
             if (!allowedInGoalsPlanning.includes(tool.name)) return false;
@@ -642,7 +800,9 @@ export function getAvailableTools(config = {}) {
         if (config.deepReviewMode === 'full' || config.deepReviewMode === 'diff') {
             const allowedInDeepReview = [
                 'read_file', 'read_many_files', 'search_files', 'list_directory',
-                'execute_command', 'get_banana_docs', 'activate_skill'
+                'execute_command', 'get_banana_docs', 'activate_skill',
+                'github_list_repositories', 'github_get_issue',
+                'github_get_pull_request', 'github_get_file'
             ];
             if (!allowedInDeepReview.includes(tool.name)) return false;
         }
@@ -749,6 +909,14 @@ export async function executeTool(name, args, config) {
         case 'list_project_memory': return await listProjectMemoryTool(args);
         case 'delete_project_memory': return await deleteProjectMemoryTool(args);
         case 'rename_file': return await renameFile(args);
+        case 'github_api_request': return await githubApiRequest(args, config);
+        case 'github_list_repositories': return await githubListRepositories(args, config);
+        case 'github_get_issue': return await githubGetIssue(args, config);
+        case 'github_get_pull_request': return await githubGetPullRequest(args, config);
+        case 'github_get_file': return await githubGetFile(args, config);
+        case 'github_add_issue_comment': return await githubAddIssueComment(args, config);
+        case 'github_create_pull_request_review': return await githubCreatePullRequestReview(args, config);
+        case 'github_merge_pull_request': return await githubMergePullRequest(args, config);
         case 'generate_image': return await generateImage(args, config);
         case 'browser_open': return await browserOpen(args, config);
         case 'browser_snapshot': return await browserSnapshot(args, config);

@@ -7,3 +7,9 @@ node_modules
 .env
 .DS_Store
 .vscode
+.claude/settings.local.json
+.claude/
+.env
+.env.*
+*.pem
+*.private-key.pem

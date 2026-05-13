@@ -65,6 +65,7 @@ While tools like Cursor provide great GUI experiences, Banana Code is built for 
 - **Modes**: Use `/agent` for normal execution, **`/plan`** for [Plan mode](#plan-mode), **`/ask`** for [Ask mode](#ask-mode), **`/security`** for [Security mode](#security-mode), or **`/skill-creator`** for [Skill Creator mode](#skill-creator-mode).
 - **Hierarchical Sub-Agents**: The main AI can spawn specialized "sub-agents" (Researchers, Coders, Reviewers) to handle complex tasks without polluting your main chat history.
 - **ImageGen Support**: Configure a local Stable Diffusion/OpenAI-compatible image server with `/imagegen` so the AI can generate image assets, choose steps, save files, and stream progress previews to API clients.
+- **GitHub App Integration**: Connect `/github` to a Banana Code backend with your GitHub App installed, then let the AI read repositories, inspect files, comment on issues/PRs, review PRs, or merge PRs with your approval.
 - **Self-Healing Loop**: If the AI runs a command (like running tests) and it fails, Banana Code automatically feeds the error trace back to the AI so it can fix its own code.
 - **Agent Skills**: Teach your AI specialized workflows. Drop a `SKILL.md` file in your config folder, and the AI will automatically activate it when relevant.
 - **Smart Context & Pruning**: Use `@file/path.js` to instantly inject file contents, auto-feed your workspace, and use `/clean` to instantly compress long chat histories to save tokens.
@@ -131,8 +132,10 @@ While in a chat, use these special commands (type `/help` for the full list):
 | `/chats` | Browse and resume saved sessions (auto-titled). |
 | `/clear` | Clear the current conversation (same provider/model). |
 | `/clean` | Summarize long history into a short memory to save tokens (beta; enable in `/beta`). |
-| `/voice` | Record speech, transcribe with Groq Whisper V3/Turbo, then send the transcript to the AI. |
+| `/copy` | Copy Banana Code's last message to your clipboard. |
+| `/voice` | Record speech, transcribe with Groq Whisper or OpenRouter GPT-4o Transcribe, then send the transcript to the AI. |
 | `/imagegen` | Configure Stable Diffusion image generation. The AI gets a `generate_image` tool that writes generated images to requested files. |
+| `/github` | Connect a GitHub App installation. Enables GitHub tools after browser authorization. |
 | `/context` | Show message count and estimated tokens. |
 | `/settings` | Workspace auto-feed, markdown/syntax output, patch tool, token count, global memory, optional Puppeteer URL fetch. |
 | `/beta` | Beta tools (e.g. MCP, optional scrapers, `/clean`). |
@@ -158,9 +161,11 @@ While in a chat, use these special commands (type `/help` for the full list):
 
 **Prompt mode shortcut:** Press `Shift+Tab` in the normal input box to cycle `default mode`, `auto accept edits on`, and `plan mode`.
 
-**Voice input:** Type `/voice` to configure your Groq API key and choose `whisper-large-v3-turbo` or `whisper-large-v3` the first time. Later `/voice` starts a microphone recording, and `/voice path/to/audio.wav` or `/voice path/to/audio.mp3` transcribes an existing file.
+**Voice input:** Type `/voice` to configure a transcription provider the first time. You can choose Groq (`whisper-large-v3-turbo` or `whisper-large-v3`) or OpenRouter (`openai/gpt-4o-mini-transcribe` or `openai/gpt-4o-transcribe`). Later `/voice` starts a microphone recording, and `/voice path/to/audio.wav` transcribes an existing audio file.
 
 **Image generation:** Type `/imagegen` to configure an OpenAI-compatible image API base URL, such as `http://127.0.0.1:8000`, and select a model. Once enabled, the AI can call `generate_image` with a prompt, output path, and optional diffusion steps. API/WebSocket clients receive `image_generation_progress` previews and `image_generation_result` / `done.generatedImages` final references.
+
+**GitHub integration:** Type `/github` to connect through the Banana Code GitHub App backend. The backend must be configured with `GITHUB_APP_ID`, `GITHUB_APP_SLUG`, and either `GITHUB_APP_PRIVATE_KEY_PATH` or `GITHUB_APP_PRIVATE_KEY`; the GitHub App setup URL should point to `https://your-backend.example/api/github/connect/callback`. The CLI stores only an opaque Banana integration token locally, while the backend keeps the GitHub App private key server-side and exchanges it for short-lived installation tokens.
 
 ### ⚡ Auto Mode
 When **Auto Mode** is selected as the model (`/model` or initial setup), each new user message is first sent to a **small, fast router model** (per provider) together with the **last seven conversation messages** (formatted as context only). The router returns JSON: which concrete model should handle **this** turn and a short reason—so short follow-ups like “Implement it” can pick a capable model when the history shows a large task. The assistant’s reply then uses that model. If routing fails, providers fall back to a sensible default (e.g. Gemini may fall back to **Gemini 3 Flash**). **OpenRouter** and **local Ollama** do not offer Auto Mode (fixed model ID vs. local tag list).
@@ -402,7 +407,7 @@ The API server is protected by a **Secure API Token**.
 | `GET` | `/api/sessions` | JSON array of all saved chat sessions (metadata only, no message history). |
 | `GET` | `/api/config` | Current runtime configuration. |
 | `GET` | `/api/docs` | Internal `BANANA.md` documentation for the current workspace. |
-| `POST` | `/api/voice` | Upload `.mp3` or `.wav`, transcribe with Groq Whisper, then send the transcript to the AI. |
+| `POST` | `/api/voice` | Upload audio, transcribe with Groq Whisper or OpenRouter GPT-4o Transcribe, then send the transcript to the AI. |
 
 ---
 
@@ -453,7 +458,7 @@ Sessions are **automatically saved to disk** after every chat message.
 
 ##### 🎙️ Voice Upload
 
-Upload an audio file and have Banana Code transcribe it through Groq Whisper before sending the transcript to the active AI provider:
+Upload an audio file and have Banana Code transcribe it before sending the transcript to the active AI provider. Groq remains supported:
 
 ```bash
 curl -X POST "http://localhost:3000/api/voice" \
@@ -464,6 +469,19 @@ curl -X POST "http://localhost:3000/api/voice" \
 ```
 
 You can also configure `voice.groqApiKey` and `voice.model` through `update_config`, then omit the Groq header and model field. The response includes `{ "transcript": "...", "finalResponse": "...", "usage": {...} }`.
+
+OpenRouter transcription uses OpenRouter's `audio/transcriptions` endpoint and supports `openai/gpt-4o-mini-transcribe` or `openai/gpt-4o-transcribe`:
+
+```bash
+curl -X POST "http://localhost:3000/api/voice" \
+  -H "Authorization: Bearer YOUR_BANANA_API_TOKEN" \
+  -H "x-openrouter-api-key: YOUR_OPENROUTER_API_KEY" \
+  -F "voiceProvider=openrouter" \
+  -F "model=openai/gpt-4o-mini-transcribe" \
+  -F "file=@question.wav"
+```
+
+You can also configure `voice.provider`, `voice.openrouterApiKey`, and `voice.model` through `update_config`, then omit the OpenRouter header and model field. Supported uploaded file extensions are `.mp3`, `.wav`, `.m4a`, `.flac`, `.ogg`, `.webm`, and `.aac`.
 
 ---
 

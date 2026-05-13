@@ -2,7 +2,7 @@
 
 **Last updated: May 11, 2026**
 
-**Updated Privacy Policy:** This update reflects Banana Code Remote phone-to-CLI chat and optional image attachments.
+**Updated Privacy Policy:** This update reflects Banana Code Remote phone-to-CLI chat, optional image attachments, and optional GitHub App integration.
 
 ## 1. Overview
 
@@ -75,47 +75,62 @@ Your Approve or Deny decisions are relayed from the app back to the CLI via our 
 
 Short-lived alphanumeric pairing codes (used to link your CLI to your phone) are stored temporarily and deleted immediately upon successful use or expiry (5 minutes).
 
-## 4. Data Storage & Security
+## 4. GitHub App Integration — Data Collected
+
+The GitHub integration is optional and starts only when you run `/github` and authorize a GitHub App installation in your browser.
+
+### 4.1 GitHub Connection Tokens
+
+The CLI stores an opaque Banana GitHub integration token locally in `~/.config/banana-code/config.json`. The server stores only a SHA-256 hash of that token, the GitHub App installation ID, and the connected GitHub account login/type. The GitHub App private key is kept on the backend server only and is never sent to users or stored in the CLI.
+
+### 4.2 GitHub Tool Calls
+
+When the AI uses GitHub tools, API requests are sent through the backend so it can exchange the GitHub App private key for short-lived GitHub installation tokens. Requests may include repository names, file paths, issue or pull request numbers, comment/review text, and other GitHub REST API payloads needed for the action. Mutating actions such as comments, reviews, and merges require user approval in Banana Code before they are sent.
+
+## 5. Data Storage & Security
 
 - Our relay server runs at `bananacode.sh` on infrastructure in the EU.
 - All connections use TLS (HTTPS / WSS).
 - All API requests and Socket.IO connections are authenticated with per-device **Bearer tokens**. Tokens are stored only as SHA-256 hashes on the server; the plain-text value never leaves your device.
+- GitHub integration tokens are also stored only as SHA-256 hashes on the server. GitHub installation access tokens are short-lived and cached in memory only.
 - Passwords are stored using **scrypt** (memory-hard key derivation). They are never stored in plain text.
 - Data is stored in an SQLite database on the server.
 - No third-party analytics, advertising networks, or data brokers receive your data.
 - Access to the server and database is restricted to the project maintainer.
 
-## 5. Data Retention
+## 6. Data Retention
 
 - Tool requests and text messages are stored for session debugging and remote message history. Phone image bytes are forwarded transiently and are not stored in message history. There is currently no automatic deletion schedule for stored text/tool data. You may request deletion at any time.
 - Pairing codes are automatically deleted after use or after 5 minutes.
+- GitHub connection sessions expire after 5 minutes. GitHub integration token records remain until you disconnect GitHub or request deletion.
 - The installation ping counter only stores an aggregate number — no per-request history is kept.
 
-## 6. Third-Party AI Providers
+## 7. Third-Party AI Providers
 
 When you use Banana Code, your prompts, file contents, and any image attachments you provide are sent to the AI provider you configured (Google, Anthropic, OpenAI, Mistral, DeepSeek, Kimi AI, Qwen, etc.) so the model can answer. Their own privacy policies govern how they handle this data. For local CLI messages, Banana Code does not intermediate or receive copies of these provider requests. For phone-originated Banana Remote messages, the prompt text and transient image bytes pass through `bananacode.sh` only to reach your paired CLI.
 
-## 7. Children's Privacy
+## 8. Children's Privacy
 
 Banana Code and Banana Code Remote are not directed at children under 13. We do not knowingly collect data from children.
 
-## 8. Your Rights
+## 9. Your Rights
 
 You have the right to:
 
 - Request a copy of data associated with your UUID.
 - Request deletion of your account UUID and all associated data from our relay server.
 - Disconnect Banana Remote at any time using `/remotetooling disconnect` in the CLI.
+- Disconnect GitHub at any time using `/github disconnect` in the CLI.
 
 To exercise these rights, contact us at **[banaxitech@gmail.com](mailto:banaxitech@gmail.com)**.
 
-## 9. Changes to This Policy
+## 10. Changes to This Policy
 
 We may update this Privacy Policy as features change. When a significant update is made, a notice banner will be displayed at the top of the website policy page for 30 days. The "Last updated" date will always reflect the date of the most recent change, and a link to the full change history is available on the website.
 
 Continued use of the product after changes constitutes acceptance of the updated policy.
 
-## 10. Contact
+## 11. Contact
 
 Questions or requests regarding this Privacy Policy:
 
