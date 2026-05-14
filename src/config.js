@@ -90,6 +90,7 @@ function getPersistentConfig(config) {
         browserController,
         requestModelSwitch,
         runtimeModelOverride,
+        newUi,
         ...persistentConfig
     } = config;
     const metadata = config[PROJECT_LOCAL_CONFIG_METADATA];

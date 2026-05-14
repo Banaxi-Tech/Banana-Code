@@ -8,6 +8,7 @@ import path from 'path';
 import fsSync from 'fs';
 import { getSystemPrompt } from '../prompt.js';
 import { printMarkdown } from '../utils/markdown.js';
+import { printNewUiAssistantMarkerIfNeeded, writeNewUiAssistantChunk } from '../utils/newUi.js';
 import { OPENAI_MODELS, CODEX_MODELS } from '../constants.js';
 import { AUTO_MODEL_DESCRIPTIONS, AUTO_ROUTER_MODELS, buildRoutingPrompt, parseRoutingResponse, openAIMessagesToAutoRouterHistory } from '../utils/autoModel.js';
 import { sendRemoteAiSegment } from '../remote.js';
@@ -315,7 +316,7 @@ export class OpenAIProvider {
                             if (this.config.isApiMode) {
                                 if (this.onChunk) this.onChunk(delta.content);
                             } else {
-                                process.stdout.write(chalk.cyan(delta.content));
+                                writeNewUiAssistantChunk(delta.content, this.config);
                             }
                         }
                         chunkResponse += delta.content;
@@ -346,7 +347,10 @@ export class OpenAIProvider {
                 if (spinner && spinner.isSpinning) spinner.stop();
 
                 if (chunkResponse) {
-                    if (this.config.useMarkedTerminal && !this.config.isApiMode) printMarkdown(chunkResponse);
+                    if (this.config.useMarkedTerminal && !this.config.isApiMode) {
+                        printNewUiAssistantMarkerIfNeeded(this.config);
+                        printMarkdown(chunkResponse);
+                    }
                     this.messages.push({ role: 'assistant', content: chunkResponse });
                 }
 
@@ -372,7 +376,7 @@ export class OpenAIProvider {
                     if (this.config.isApiMode && this.onToolStart) {
                         this.onToolStart(call.function.name);
                     }
-                    if (!this.config.isApiMode) {
+                    if (!this.config.isApiMode && !this.config.newUi) {
                         console.log(chalk.yellow(`\n[Banana Calling Tool: ${call.function.name}]`));
                     }
                     let args = {};
@@ -396,7 +400,7 @@ export class OpenAIProvider {
                     if (this.config.debug && !this.config.isApiMode) {
                         console.log(chalk.gray(`[DEBUG] Tool Result: ${typeof res === 'string' ? res : JSON.stringify(res, null, 2)}`));
                     }
-                    if (!this.config.isApiMode) {
+                    if (!this.config.isApiMode && !this.config.newUi) {
                         console.log(chalk.yellow(`[Tool Result Received]\n`));
                     }
 
@@ -625,7 +629,7 @@ export class OpenAIProvider {
                                             if (this.config.isApiMode && this.onChunk) {
                                                 this.onChunk(data.delta);
                                             } else if (!this.config.isApiMode) {
-                                                process.stdout.write(chalk.cyan(data.delta));
+                                                writeNewUiAssistantChunk(data.delta, this.config);
                                             }
                                         }
                                         currentChunkResponse += data.delta;
@@ -699,7 +703,7 @@ export class OpenAIProvider {
                             if (currentEvent === 'response.output_text.delta') {
                                 if (spinner && spinner.isSpinning) spinner.stop();
                                 if (!this.config.isApiMode) {
-                                    process.stdout.write(chalk.cyan(data.delta));
+                                    writeNewUiAssistantChunk(data.delta, this.config);
                                 }
                                 currentChunkResponse += data.delta;
                                 finalResponse += data.delta;
@@ -711,7 +715,10 @@ export class OpenAIProvider {
                 if (spinner && spinner.isSpinning) spinner.stop();
 
                 if (currentChunkResponse) {
-                    if (this.config.useMarkedTerminal && !this.config.isApiMode) printMarkdown(currentChunkResponse);
+                    if (this.config.useMarkedTerminal && !this.config.isApiMode) {
+                        printNewUiAssistantMarkerIfNeeded(this.config);
+                        printMarkdown(currentChunkResponse);
+                    }
                     this.messages.push({ role: 'assistant', content: currentChunkResponse });
                 }
 
@@ -731,7 +738,7 @@ export class OpenAIProvider {
                     if (this.config.isApiMode && this.onToolStart) {
                         this.onToolStart(call.function.name);
                     }
-                    if (!this.config.isApiMode) {
+                    if (!this.config.isApiMode && !this.config.newUi) {
                         console.log(chalk.yellow(`\n[Banana Calling Tool: ${call.function.name}]`));
                     }
                     let args = {};
@@ -755,7 +762,7 @@ export class OpenAIProvider {
                     if (this.config.debug && !this.config.isApiMode) {
                         console.log(chalk.gray(`[DEBUG] Tool Result: ${typeof res === 'string' ? res : JSON.stringify(res, null, 2)}`));
                     }
-                    if (!this.config.isApiMode) {
+                    if (!this.config.isApiMode && !this.config.newUi) {
                         console.log(chalk.yellow(`[Tool Result Received]\n`));
                     }
 

@@ -7,6 +7,7 @@ import ora from 'ora';
 import { getRandomSpinnerText } from '../utils/spinner.js';
 import { getSystemPrompt } from '../prompt.js';
 import { printMarkdown } from '../utils/markdown.js';
+import { printNewUiAssistantMarkerIfNeeded, writeNewUiAssistantChunk } from '../utils/newUi.js';
 import { sendRemoteAiSegment } from '../remote.js';
 
 export class OllamaProvider {
@@ -106,7 +107,7 @@ export class OllamaProvider {
                                         if (this.config.isApiMode && this.onChunk) {
                                             this.onChunk(content);
                                         } else if (!this.config.isApiMode) {
-                                            process.stdout.write(chalk.cyan(content));
+                                            writeNewUiAssistantChunk(content, this.config);
                                         }
                                     }
                                     currentChunkResponse += content;
@@ -120,7 +121,7 @@ export class OllamaProvider {
                 if (spinner && spinner.isSpinning) spinner.stop();
 
                 if (currentChunkResponse && this.config.useMarkedTerminal && !this.config.isApiMode) {
-                    printMarkdown(currentChunkResponse);
+                    printNewUiAssistantMarkerIfNeeded(this.config); printMarkdown(currentChunkResponse);
                 }
 
                 lastMessageObj.content = currentChunkResponse || '';
@@ -140,7 +141,7 @@ export class OllamaProvider {
                     if (this.config.isApiMode && this.onToolStart) {
                         this.onToolStart(fn.name);
                     }
-                    if (!this.config.isApiMode) {
+                    if (!this.config.isApiMode && !this.config.newUi) {
                         console.log(chalk.yellow(`\n[Banana Calling Tool: ${fn.name}]`));
                     }
 
@@ -151,7 +152,7 @@ export class OllamaProvider {
                     if (this.config.debug && !this.config.isApiMode) {
                         console.log(chalk.gray(`[DEBUG] Tool Result: ${typeof res === 'string' ? res : JSON.stringify(res, null, 2)}`));
                     }
-                    if (!this.config.isApiMode) {
+                    if (!this.config.isApiMode && !this.config.newUi) {
                         console.log(chalk.yellow(`[Tool Result Received]\n`));
                     }
 

@@ -7,6 +7,7 @@ import ora from 'ora';
 import { getRandomSpinnerText } from '../utils/spinner.js';
 import { getSystemPrompt } from '../prompt.js';
 import { printMarkdown } from '../utils/markdown.js';
+import { printNewUiAssistantMarkerIfNeeded, writeNewUiAssistantChunk } from '../utils/newUi.js';
 import { GEMINI_MODELS } from '../constants.js';
 import { AUTO_MODEL_DESCRIPTIONS, AUTO_ROUTER_MODELS, buildRoutingPrompt, parseRoutingResponse, geminiMessagesToAutoRouterHistory } from '../utils/autoModel.js';
 import { sendRemoteAiSegment } from '../remote.js';
@@ -246,7 +247,7 @@ export class GeminiProvider {
                                             if (this.config.isApiMode && this.onChunk) {
                                                 this.onChunk(part.text);
                                             } else {
-                                                process.stdout.write(chalk.cyan(part.text));
+                                                writeNewUiAssistantChunk(part.text, this.config);
                                             }
                                         }
                                         responseText += part.text;
@@ -285,7 +286,7 @@ export class GeminiProvider {
                 if (spinner && spinner.isSpinning) spinner.stop();
 
                 if (currentTurnText && this.config.useMarkedTerminal) {
-                    printMarkdown(currentTurnText);
+                    printNewUiAssistantMarkerIfNeeded(this.config); printMarkdown(currentTurnText);
                 }
 
                 if (aggregatedParts.length === 0) break;
@@ -307,7 +308,7 @@ export class GeminiProvider {
                         if (this.config.isApiMode && this.onToolStart) {
                             this.onToolStart(call.name);
                         }
-                        if (!this.config.isApiMode) {
+                        if (!this.config.isApiMode && !this.config.newUi) {
                             console.log(chalk.yellow(`\n[Banana Calling Tool: ${call.name}]`));
                         }
                         const res = await executeTool(call.name, call.args, this.config);
@@ -317,7 +318,7 @@ export class GeminiProvider {
                         if (this.config.debug && !this.config.isApiMode) {
                             console.log(chalk.gray(`[DEBUG] Tool Result: ${typeof res === 'string' ? res : JSON.stringify(res, null, 2)}`));
                         }
-                        if (!this.config.isApiMode) {
+                        if (!this.config.isApiMode && !this.config.newUi) {
                             console.log(chalk.yellow(`[Tool Result Received]\n`));
                         }
 

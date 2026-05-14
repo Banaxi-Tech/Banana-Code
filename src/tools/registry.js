@@ -47,6 +47,7 @@ import {
 import { mcpManager } from '../utils/mcp.js';
 import { saveMemoryTool, listMemoryTool, deleteMemoryTool, saveProjectMemoryTool, listProjectMemoryTool, deleteProjectMemoryTool } from './memoryTools.js';
 import { pluginRegistry } from '../utils/plugins.js';
+import { printNewUiToolCall } from '../utils/newUi.js';
 import { MODEL_SWITCH_TOOL_NAME, providerSupportsModelSwitch } from '../utils/modelSwitch.js';
 
 const BROWSER_TOOLS = [
@@ -864,6 +865,8 @@ export function sanitizeSchemaForStrictAPIs(schema) {
 }
 
 export async function executeTool(name, args, config) {
+    printNewUiToolCall(name, args, config);
+
     // Check if it's an MCP tool first
     if (config.betaTools && config.betaTools.includes('mcp_support')) {
         const mcpTools = mcpManager.getTools();

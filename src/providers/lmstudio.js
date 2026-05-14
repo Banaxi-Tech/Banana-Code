@@ -8,6 +8,7 @@ import ora from 'ora';
 import { getRandomSpinnerText } from '../utils/spinner.js';
 import { getSystemPrompt } from '../prompt.js';
 import { printMarkdown } from '../utils/markdown.js';
+import { printNewUiAssistantMarkerIfNeeded, writeNewUiAssistantChunk } from '../utils/newUi.js';
 import { sendRemoteAiSegment } from '../remote.js';
 
 export class LMStudioProvider {
@@ -98,7 +99,7 @@ export class LMStudioProvider {
                             if (this.config.isApiMode) {
                                 if (this.onChunk) this.onChunk(delta.content);
                             } else {
-                                process.stdout.write(chalk.cyan(delta.content));
+                                writeNewUiAssistantChunk(delta.content, this.config);
                             }
                         }
                         chunkResponse += delta.content;
@@ -129,7 +130,10 @@ export class LMStudioProvider {
                 if (spinner && spinner.isSpinning) spinner.stop();
 
                 if (chunkResponse) {
-                    if (this.config.useMarkedTerminal && !this.config.isApiMode) printMarkdown(chunkResponse);
+                    if (this.config.useMarkedTerminal && !this.config.isApiMode) {
+                        printNewUiAssistantMarkerIfNeeded(this.config);
+                        printMarkdown(chunkResponse);
+                    }
                     this.messages.push({ role: 'assistant', content: chunkResponse });
                 }
 
@@ -154,7 +158,7 @@ export class LMStudioProvider {
                     if (this.config.isApiMode && this.onToolStart) {
                         this.onToolStart(call.function.name);
                     }
-                    if (!this.config.isApiMode) {
+                    if (!this.config.isApiMode && !this.config.newUi) {
                         console.log(chalk.yellow(`\n[Banana Calling Tool: ${call.function.name}]`));
                     }
                     let args = {};
@@ -173,7 +177,7 @@ export class LMStudioProvider {
                     if (this.config.debug && !this.config.isApiMode) {
                         console.log(chalk.gray(`[DEBUG] Tool Result: ${typeof res === 'string' ? res : JSON.stringify(res, null, 2)}`));
                     }
-                    if (!this.config.isApiMode) {
+                    if (!this.config.isApiMode && !this.config.newUi) {
                         console.log(chalk.yellow(`[Tool Result Received]\n`));
                     }
 

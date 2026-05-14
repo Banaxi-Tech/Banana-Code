@@ -44,6 +44,7 @@ Type these into the chat to control the app:
 ## 🚀 CLI Flags
 - --resume [uuid] : Resume a specific session (or the latest if UUID is omitted).
 - --yolo          : Start the app with YOLO mode enabled.
+- --oldui         : Start with the legacy terminal UI instead of the refreshed default UI.
 - --api [port]    : Start Banana Code as a REST API server.
 - --no-auth       : Disable API authentication (use with caution).
 

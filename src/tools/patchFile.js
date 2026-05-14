@@ -7,6 +7,7 @@ import { requestPermission } from '../permissions.js';
 import { sendRemoteToolEvent } from '../remote.js';
 import * as diff from 'diff';
 import chalk from 'chalk';
+import { isNewUiEnabled, printNewUiFilePreview } from '../utils/newUiFileDiff.js';
 
 export async function patchFile({ filepath, edits }) {
     const absPath = path.resolve(process.cwd(), filepath);
@@ -47,14 +48,18 @@ export async function patchFile({ filepath, edits }) {
 
     const patch = diff.createPatch(filepath, originalContent, content);
 
-    process.stdout.write('\x1b[0m');
-    console.log(chalk.cyan(`\nPreviewing changes for ${filepath}:`));
-    patch.split('\n').filter(l => l.length > 0 && !l.startsWith('===') && !l.startsWith('---') && !l.startsWith('+++')).forEach(line => {
-        if (line.startsWith('+')) console.log(chalk.green(line));
-        else if (line.startsWith('-')) console.log(chalk.red(line));
-        else console.log(chalk.gray(line));
-    });
-    console.log('');
+    if (isNewUiEnabled()) {
+        printNewUiFilePreview('Patch File', filepath, patch);
+    } else {
+        process.stdout.write('\x1b[0m');
+        console.log(chalk.cyan(`\nPreviewing changes for ${filepath}:`));
+        patch.split('\n').filter(l => l.length > 0 && !l.startsWith('===') && !l.startsWith('---') && !l.startsWith('+++')).forEach(line => {
+            if (line.startsWith('+')) console.log(chalk.green(line));
+            else if (line.startsWith('-')) console.log(chalk.red(line));
+            else console.log(chalk.gray(line));
+        });
+        console.log('');
+    }
 
     const details = `${filepath}\n\n${patch}`;
     const perm = await requestPermission('Patch File', details);

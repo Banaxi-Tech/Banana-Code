@@ -8,6 +8,7 @@ import ora from 'ora';
 import { getRandomSpinnerText } from '../utils/spinner.js';
 import { getSystemPrompt } from '../prompt.js';
 import { printMarkdown } from '../utils/markdown.js';
+import { printNewUiAssistantMarkerIfNeeded, writeNewUiAssistantChunk } from '../utils/newUi.js';
 import { KIMI_MODELS } from '../constants.js';
 import { AUTO_MODEL_DESCRIPTIONS, AUTO_ROUTER_MODELS, buildRoutingPrompt, parseRoutingResponse, openAIMessagesToAutoRouterHistory } from '../utils/autoModel.js';
 import { sendRemoteAiSegment } from '../remote.js';
@@ -185,7 +186,7 @@ export class KimiProvider {
                             if (this.config.isApiMode && this.onChunk) {
                                 this.onChunk(delta.content);
                             } else if (!this.config.isApiMode) {
-                                process.stdout.write(chalk.cyan(delta.content));
+                                writeNewUiAssistantChunk(delta.content, this.config);
                             }
                         }
                         chunkResponse += delta.content;
@@ -222,7 +223,10 @@ export class KimiProvider {
 
                 if (toolCalls.length === 0) {
                     if (chunkResponse) {
-                        if (this.config.useMarkedTerminal && !this.config.isApiMode) printMarkdown(chunkResponse);
+                        if (this.config.useMarkedTerminal && !this.config.isApiMode) {
+                        printNewUiAssistantMarkerIfNeeded(this.config);
+                        printMarkdown(chunkResponse);
+                    }
                         this.messages.push({ role: 'assistant', content: chunkResponse });
                     }
                     if (!this.config.isApiMode) console.log();
@@ -230,7 +234,7 @@ export class KimiProvider {
                 }
 
                 if (chunkResponse && this.config.useMarkedTerminal && !this.config.isApiMode) {
-                    printMarkdown(chunkResponse);
+                    printNewUiAssistantMarkerIfNeeded(this.config); printMarkdown(chunkResponse);
                 }
                 if (chunkResponse && !this.config.isApiMode) {
                     sendRemoteAiSegment(chunkResponse);
@@ -251,7 +255,7 @@ export class KimiProvider {
                     if (this.config.isApiMode && this.onToolStart) {
                         this.onToolStart(call.function.name);
                     }
-                    if (!this.config.isApiMode) {
+                    if (!this.config.isApiMode && !this.config.newUi) {
                         console.log(chalk.yellow(`\n[Banana Calling Tool: ${call.function.name}]`));
                     }
                     let args = {};
@@ -266,7 +270,7 @@ export class KimiProvider {
                     if (this.config.debug && !this.config.isApiMode) {
                         console.log(chalk.gray(`[DEBUG] Tool Result: ${typeof res === 'string' ? res : JSON.stringify(res, null, 2)}`));
                     }
-                    if (!this.config.isApiMode) {
+                    if (!this.config.isApiMode && !this.config.newUi) {
                         console.log(chalk.yellow(`[Tool Result Received]\n`));
                     }
 

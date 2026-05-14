@@ -36,6 +36,7 @@ import { extractUltrathinkDirective, isUltrathinkMention, providerSupportsUltrat
 import { cleanupVoiceClip, getVoiceApiKey, getVoiceConfig, getVoiceProvider, getVoiceProviderLabel, hasUsableVoiceConfig, isSupportedVoiceFile, recordVoiceClip, setupVoiceConfig, transcribeVoice } from './voice.js';
 import { setRuntimeModelOverride } from './utils/modelSwitch.js';
 import { disconnectGitHubIntegration, setupGitHubIntegration, showGitHubStatus } from './github.js';
+import { queueNewUiAssistantMarker } from './utils/newUi.js';
 
 let config;
 let providerInstance;
@@ -552,7 +553,11 @@ async function sendPromptToAi(finalInput, { attachedImages = [], ultrathinkEnabl
         }
     }
 
-    process.stdout.write(chalk.cyan('✦ '));
+    if (isNewUiEnabled()) {
+        queueNewUiAssistantMarker(config);
+    } else {
+        process.stdout.write(chalk.cyan('✦ '));
+    }
     global.isAiSpeaking = true;
     let responseText;
     const messageCountBeforeResponse = Array.isArray(providerInstance.messages) ? providerInstance.messages.length : 0;
@@ -2164,6 +2169,22 @@ function stripAnsi(text) {
     return String(text || '').replace(/\x1b\[[0-9;]*m/g, '');
 }
 
+function isNewUiEnabled() {
+    return !process.argv.includes('--oldui');
+}
+
+function getPromptPrefix() {
+    return isNewUiEnabled() ? '❯ ' : ' > ';
+}
+
+function getPromptPlaceholder() {
+    return isNewUiEnabled() ? '' : 'Type your message or @path/to/file';
+}
+
+function getPromptFooterRows() {
+    return isNewUiEnabled() ? 2 : 3;
+}
+
 function getPromptCycleMode() {
     if (config?.planMode) return 'plan';
     if (config?.autoAcceptEditsMode) return 'autoAcceptEdits';
@@ -2217,9 +2238,70 @@ function formatPromptCycleIndicator() {
         return rainbowVoice('⏵⏵ plan mode', ultrathinkAnimationFrame) + suffix;
     }
     if (mode === 'autoAcceptEdits') {
-        return chalk.yellow('⏵⏵ auto accept edits on') + suffix;
+        const label = isNewUiEnabled() ? '⏵⏵ accept edits on' : '⏵⏵ auto accept edits on';
+        return chalk.yellow(label) + suffix;
     }
     return chalk.cyan('⏵⏵ default mode') + suffix;
+}
+
+function formatPromptStatusLine(width) {
+    const rawModel = providerInstance ? providerInstance.modelName : (config.model || 'unknown');
+    const modelDisplay = rawModel === 'auto' ? chalk.cyan('[AUTO]') : rawModel;
+    const providerDisplay = getActiveProviderId().toUpperCase();
+    let modeDisplay = chalk.green('AGENT MODE');
+    if (config.goalsPlanningMode) modeDisplay = chalk.cyan('GOALS');
+    else if (config.askMode) modeDisplay = chalk.blue('ASK MODE');
+    else if (config.securityMode) modeDisplay = chalk.red('SECURITY MODE');
+    else if (config.planMode) modeDisplay = chalk.magenta('PLAN MODE');
+    else if (config.skillCreatorMode) modeDisplay = chalk.cyan('SKILL CREATOR MODE');
+    const bananaSplitDisplay = config.bananaSplit?.enabled ? ` / ${chalk.magenta('BananaSplit Active')}` : '';
+
+    let tokenDisplay = '';
+    if (config.showTokenCount && providerInstance) {
+        let msgs = providerInstance.messages || [];
+        // Support for Ollama chat history format if different
+        if (!providerInstance.messages && typeof providerInstance.chat?.getHistory === 'function') {
+            msgs = providerInstance.chat.getHistory(); // Note: this is async normally, but we use an approximation here or just skip it if it's strictly async. For now, assume providerInstance.messages is the standard.
+        }
+        const tokens = estimateConversationTokens(msgs);
+        let color = chalk.green;
+        if (tokens >= 128000) color = chalk.red;
+        else if (tokens >= 86000) color = chalk.hex('#FFA500'); // Orange
+        else if (tokens >= 64000) color = chalk.yellow;
+
+        tokenDisplay = ` / Tokens: ${color(tokens.toLocaleString())}`;
+    }
+
+    let costDisplay = '';
+    if (providerInstance && typeof providerInstance.calculateSessionCost === 'function') {
+        const { cost } = providerInstance.calculateSessionCost();
+        if (parseFloat(cost) > 0) {
+            costDisplay = ` / Cost: ${chalk.green('$' + cost)}`;
+        }
+    }
+
+    const yoloDisplay = config.yolo ? chalk.bgRed.white.bold(' YOLO ') : '';
+    const leftText = ` Provider: ${chalk.cyan(providerDisplay)} / Model: ${chalk.yellow(modelDisplay)} / ${modeDisplay}${bananaSplitDisplay}${tokenDisplay}${costDisplay}${yoloDisplay ? ' / ' + yoloDisplay : ''}`;
+    const rightText = chalk.gray('/help for shortcuts ');
+    const leftStripped = stripAnsi(leftText);
+    const rightStripped = stripAnsi(rightText);
+    const midPad = Math.max(0, width - leftStripped.length - rightStripped.length);
+    return chalk.gray(leftText + ' '.repeat(midPad) + rightText);
+}
+
+function getPromptFooterLines(width) {
+    const separator = chalk.gray('─'.repeat(width));
+    if (isNewUiEnabled()) {
+        return [
+            separator,
+            padLine(`  ${formatPromptCycleIndicator()}`, width)
+        ];
+    }
+    return [
+        formatPromptStatusLine(width),
+        padLine(` ${formatPromptCycleIndicator()}`, width),
+        separator
+    ];
 }
 
 function isUltrathinkRainbowEnabled() {
@@ -2319,12 +2401,11 @@ let lastPromptRows = 1;
 // boundary — leading to redraws landing above the prompt and leaving stale
 // content (e.g. duplicate ' > ' lines).
 let lastCursorRow = 0;
-const PROMPT_FOOTER_ROWS = 3;
 
 function drawPromptBox(inputText, cursorPos) {
     const width = getTermWidth();
-    const placeholder = 'Type your message or @path/to/file';
-    const prefix = ' > ';
+    const placeholder = getPromptPlaceholder();
+    const prefix = getPromptPrefix();
 
     const isEmpty = inputText.length === 0;
     const rawContent = isEmpty ? placeholder : inputText;
@@ -2341,6 +2422,10 @@ function drawPromptBox(inputText, cursorPos) {
     }
     process.stdout.write(`\x1b[1G\x1b[J`);
 
+    if (isNewUiEnabled()) {
+        process.stdout.write(chalk.gray('─'.repeat(width)) + '\n');
+    }
+
     // Draw each row: slice raw content, then color per-segment so ANSI escapes
     // never bleed across line boundaries.
     const firstRowChars = width - prefix.length;
@@ -2354,58 +2439,14 @@ function drawPromptBox(inputText, cursorPos) {
             segment = rawContent.substring(offset, offset + width);
             lineText = stylePromptSegment(segment, isEmpty);
         }
-        process.stdout.write(userBg(padLine(lineText, width)) + '\n');
+        const outputLine = isNewUiEnabled() ? padLine(lineText, width) : userBg(padLine(lineText, width));
+        process.stdout.write(outputLine + '\n');
     }
 
-    // Redraw status bar and separator (they are always below the prompt)
-    const rawModel = providerInstance ? providerInstance.modelName : (config.model || 'unknown');
-    const modelDisplay = rawModel === 'auto' ? chalk.cyan('[AUTO]') : rawModel;
-    const providerDisplay = getActiveProviderId().toUpperCase();
-    let modeDisplay = chalk.green('AGENT MODE');
-    if (config.goalsPlanningMode) modeDisplay = chalk.cyan('GOALS');
-    else if (config.askMode) modeDisplay = chalk.blue('ASK MODE');
-    else if (config.securityMode) modeDisplay = chalk.red('SECURITY MODE');
-    else if (config.planMode) modeDisplay = chalk.magenta('PLAN MODE');
-    else if (config.skillCreatorMode) modeDisplay = chalk.cyan('SKILL CREATOR MODE');
-    const bananaSplitDisplay = config.bananaSplit?.enabled ? ` / ${chalk.magenta('BananaSplit Active')}` : '';
-
-    let tokenDisplay = '';
-    if (config.showTokenCount && providerInstance) {
-        let msgs = providerInstance.messages || [];
-        // Support for Ollama chat history format if different
-        if (!providerInstance.messages && typeof providerInstance.chat?.getHistory === 'function') {
-            msgs = providerInstance.chat.getHistory(); // Note: this is async normally, but we use an approximation here or just skip it if it's strictly async. For now, assume providerInstance.messages is the standard.
-        }
-        const tokens = estimateConversationTokens(msgs);
-        let color = chalk.green;
-        if (tokens >= 128000) color = chalk.red;
-        else if (tokens >= 86000) color = chalk.hex('#FFA500'); // Orange
-        else if (tokens >= 64000) color = chalk.yellow;
-
-        tokenDisplay = ` / Tokens: ${color(tokens.toLocaleString())}`;
-    }
-
-    let costDisplay = '';
-    if (providerInstance && typeof providerInstance.calculateSessionCost === 'function') {
-        const { cost } = providerInstance.calculateSessionCost();
-        if (parseFloat(cost) > 0) {
-            costDisplay = ` / Cost: ${chalk.green('$' + cost)}`;
-        }
-    }
-
-    const yoloDisplay = config.yolo ? chalk.bgRed.white.bold(' YOLO ') : '';
-    const leftText = ` Provider: ${chalk.cyan(providerDisplay)} / Model: ${chalk.yellow(modelDisplay)} / ${modeDisplay}${bananaSplitDisplay}${tokenDisplay}${costDisplay}${yoloDisplay ? ' / ' + yoloDisplay : ''}`;
-    const rightText = chalk.gray('/help for shortcuts ');
-    const leftStripped = stripAnsi(leftText);
-    const rightStripped = stripAnsi(rightText);
-    const midPad = Math.max(0, width - leftStripped.length - rightStripped.length);
-    const statusLine = chalk.gray(leftText + ' '.repeat(midPad) + rightText);
-    const promptModeLine = ` ${formatPromptCycleIndicator()}`;
-    const separator = chalk.gray('─'.repeat(width));
-
-    process.stdout.write(statusLine + '\n');
-    process.stdout.write(padLine(promptModeLine, width) + '\n');
-    process.stdout.write(separator);
+    const footerLines = getPromptFooterLines(width);
+    footerLines.forEach((line, index) => {
+        process.stdout.write(line + (index === footerLines.length - 1 ? '' : '\n'));
+    });
 
     lastPromptRows = rows;
 
@@ -2414,16 +2455,16 @@ function drawPromptBox(inputText, cursorPos) {
     const targetCol = (cursorIndex % width) + 1;
 
     // Move cursor back up (footer rows + N-1-targetRow for prompt rows)
-    const moveUp = (rows - 1 - targetRow) + PROMPT_FOOTER_ROWS;
+    const moveUp = (rows - 1 - targetRow) + getPromptFooterRows();
     process.stdout.write(`\x1b[${moveUp}A\x1b[${targetCol}G`);
 
-    lastCursorRow = targetRow;
+    lastCursorRow = isNewUiEnabled() ? targetRow + 1 : targetRow;
 }
 
 function drawPromptBoxInitial(inputText) {
     const width = getTermWidth();
-    const placeholder = 'Type your message or @path/to/file';
-    const prefix = ' > ';
+    const placeholder = getPromptPlaceholder();
+    const prefix = getPromptPrefix();
 
     const isEmpty = inputText.length === 0;
     const rawContent = isEmpty ? placeholder : inputText;
@@ -2432,6 +2473,10 @@ function drawPromptBoxInitial(inputText) {
     const rows = Math.max(Math.ceil(totalChars / width) || 1, Math.floor(cursorIndex / width) + 1);
 
     lastPromptRows = rows;
+
+    if (isNewUiEnabled()) {
+        process.stdout.write(chalk.gray('─'.repeat(width)) + '\n');
+    }
 
     // Draw initial wrapped lines: slice raw content first, color per-segment.
     const firstRowChars = width - prefix.length;
@@ -2445,68 +2490,23 @@ function drawPromptBoxInitial(inputText) {
             segment = rawContent.substring(offset, offset + width);
             lineText = stylePromptSegment(segment, isEmpty);
         }
-        process.stdout.write(userBg(padLine(lineText, width)) + '\n');
+        const outputLine = isNewUiEnabled() ? padLine(lineText, width) : userBg(padLine(lineText, width));
+        process.stdout.write(outputLine + '\n');
     }
 
-    // Status bar: Current Provider / Model + right-aligned "/help for shortcuts"
-    const rawModel = providerInstance ? providerInstance.modelName : (config.model || 'unknown');
-    const modelDisplay = rawModel === 'auto' ? chalk.cyan('[AUTO]') : rawModel;
-    const providerDisplay = getActiveProviderId().toUpperCase();
-    let modeDisplay = chalk.green('AGENT MODE');
-    if (config.goalsPlanningMode) modeDisplay = chalk.cyan('GOALS');
-    else if (config.askMode) modeDisplay = chalk.blue('ASK MODE');
-    else if (config.securityMode) modeDisplay = chalk.red('SECURITY MODE');
-    else if (config.planMode) modeDisplay = chalk.magenta('PLAN MODE');
-    else if (config.skillCreatorMode) modeDisplay = chalk.cyan('SKILL CREATOR MODE');
-    const bananaSplitDisplay = config.bananaSplit?.enabled ? ` / ${chalk.magenta('BananaSplit Active')}` : '';
-
-    let tokenDisplay = '';
-    if (config.showTokenCount && providerInstance) {
-        let msgs = providerInstance.messages || [];
-        // Support for Ollama chat history format if different
-        if (!providerInstance.messages && typeof providerInstance.chat?.getHistory === 'function') {
-            msgs = providerInstance.chat.getHistory(); // Note: this is async normally, but we use an approximation here or just skip it if it's strictly async. For now, assume providerInstance.messages is the standard.
-        }
-        const tokens = estimateConversationTokens(msgs);
-        let color = chalk.green;
-        if (tokens >= 128000) color = chalk.red;
-        else if (tokens >= 86000) color = chalk.hex('#FFA500'); // Orange
-        else if (tokens >= 64000) color = chalk.yellow;
-
-        tokenDisplay = ` / Tokens: ${color(tokens.toLocaleString())}`;
-    }
-
-    let costDisplay = '';
-    if (providerInstance && typeof providerInstance.calculateSessionCost === 'function') {
-        const { cost } = providerInstance.calculateSessionCost();
-        if (parseFloat(cost) > 0) {
-            costDisplay = ` / Cost: ${chalk.green('$' + cost)}`;
-        }
-    }
-
-    const yoloDisplay = config.yolo ? chalk.bgRed.white.bold(' YOLO ') : '';
-    const leftText = ` Provider: ${chalk.cyan(providerDisplay)} / Model: ${chalk.yellow(modelDisplay)} / ${modeDisplay}${bananaSplitDisplay}${tokenDisplay}${costDisplay}${yoloDisplay ? ' / ' + yoloDisplay : ''}`;
-    const rightText = chalk.gray('/help for shortcuts ');
-
-    const leftStripped = stripAnsi(leftText);
-    const rightStripped = stripAnsi(rightText);
-    const midPad = Math.max(0, width - leftStripped.length - rightStripped.length);
-    const statusLine = chalk.gray(leftText + ' '.repeat(midPad) + rightText);
-    const promptModeLine = ` ${formatPromptCycleIndicator()}`;
-    const separator = chalk.gray('─'.repeat(width));
-
-    process.stdout.write(statusLine + '\n');
-    process.stdout.write(padLine(promptModeLine, width) + '\n');
-    process.stdout.write(separator);
+    const footerLines = getPromptFooterLines(width);
+    footerLines.forEach((line, index) => {
+        process.stdout.write(line + (index === footerLines.length - 1 ? '' : '\n'));
+    });
 
     // Move cursor back up to content line (up footer rows + N-1 for wrapping)
     const targetRow = Math.floor(cursorIndex / width);
-    const moveUp = (rows - 1 - targetRow) + PROMPT_FOOTER_ROWS;
+    const moveUp = (rows - 1 - targetRow) + getPromptFooterRows();
     const targetCol = (cursorIndex % width) + 1;
 
     process.stdout.write(`\x1b[${moveUp}A\x1b[${targetCol}G`);
 
-    lastCursorRow = targetRow;
+    lastCursorRow = isNewUiEnabled() ? targetRow + 1 : targetRow;
 }
 
 function promptUser() {
@@ -2574,12 +2574,13 @@ function promptUser() {
             // Move cursor past the prompt lines + status + separator, clear them
             // We are currently on some row of the prompt.
             const width = getTermWidth();
-            const cursorIndex = ("> ".length + 1) + cursorPos; // Approx
+            const cursorIndex = getPromptPrefix().length + cursorPos;
             const currentRow = Math.floor(cursorIndex / width);
             const moveDown = (lastPromptRows - 1 - currentRow) + 1;
+            const footerRows = getPromptFooterRows();
 
             process.stdout.write(`\x1b[${moveDown}B`); // move to status line
-            for (let i = 0; i < PROMPT_FOOTER_ROWS; i++) { // clear status rows and separator
+            for (let i = 0; i < footerRows; i++) { // clear status rows and separator
                 process.stdout.write(`\x1b[2K\x1b[1B`);
             }
             process.stdout.write(`\x1b[1G\n`);   // beginning of line + newline
@@ -2589,18 +2590,20 @@ function promptUser() {
         const handleExit = async () => {
             if (!exitRequested) {
                 exitRequested = true;
-                const moveDown = lastPromptRows + PROMPT_FOOTER_ROWS - 1; // rough guess
+                const footerRows = getPromptFooterRows();
+                const moveDown = lastPromptRows + footerRows - 1; // rough guess
                 process.stdout.write(`\x1b[${moveDown}B`);
-                for (let i = 0; i < PROMPT_FOOTER_ROWS; i++) {
+                for (let i = 0; i < footerRows; i++) {
                     process.stdout.write(`\x1b[2K\x1b[1B`);
                 }
                 process.stdout.write('\x1b[1G\n');
                 process.stdout.write(chalk.yellow('(Press CTRL+C or CTRL+D again to exit)\n'));
                 resolve(REPROMPT_SIGNAL);
             } else {
-                const moveDown = lastPromptRows + PROMPT_FOOTER_ROWS - 1;
+                const footerRows = getPromptFooterRows();
+                const moveDown = lastPromptRows + footerRows - 1;
                 process.stdout.write(`\x1b[${moveDown}B`);
-                for (let i = 0; i < PROMPT_FOOTER_ROWS; i++) {
+                for (let i = 0; i < footerRows; i++) {
                     process.stdout.write(`\x1b[2K\x1b[1B`);
                 }
                 process.stdout.write('\x1b[1G\n');
@@ -2778,6 +2781,10 @@ async function main() {
         }
 
         config = await loadConfig({ includeProjectLocal: true });
+        config.newUi = isNewUiEnabled();
+        if (config.newUi) {
+            process.env.BANANA_CODE_NEWUI = '1';
+        }
 
         // Default Banana Guard to true for existing users upgrading
         if (config.useBananaGuard === undefined) {
@@ -2816,8 +2823,20 @@ async function main() {
         setYoloMode(config.yolo);
         setAutoAcceptEditsMode(config.autoAcceptEditsMode === true);
 
-        await runStartup();
-        await loadPlugins();
+        if (config.newUi) {
+            await loadPlugins();
+            const startupConfig = getBananaSplitLocalConfig(config);
+            await runStartup({
+                newUi: true,
+                cwd: process.cwd(),
+                providerName: getActiveProviderId(),
+                modelName: startupConfig.model || 'unknown',
+                authType: startupConfig.authType || 'api_key'
+            });
+        } else {
+            await runStartup();
+            await loadPlugins();
+        }
 
         if (config.betaTools && config.betaTools.includes('mcp_support')) {
             await mcpManager.init();

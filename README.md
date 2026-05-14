@@ -106,6 +106,7 @@ Optional flags:
 | Flag | Effect |
 |------|--------|
 | `--yolo` | Start with YOLO mode on (same as `/yolo` in-app: auto-approve permission prompts). |
+| `--oldui` | Start with the legacy terminal UI instead of the refreshed default UI. |
 | `--resume [uuid]` | Resume a session; UUID optional (latest session if omitted). |
 
 ### Project-Specific Settings
