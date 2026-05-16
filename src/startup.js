@@ -112,6 +112,7 @@ function formatProviderLabel(providerName) {
         openrouter: 'OpenRouter',
         ollama_cloud: 'Ollama Cloud',
         lmstudio: 'LM Studio',
+        llamacpp: 'llama.cpp',
         gemini: 'Gemini',
         claude: 'Claude',
         mistral: 'Mistral',

@@ -43,6 +43,8 @@ export function getRandomSpinnerText(provider) {
                 return 'Ollaming...';
             case 'lmstudio':
                 return 'LMing...';
+            case 'llamacpp':
+                return 'Llamaing...';
         }
     }
     const verb = SPINNER_VERBS[Math.floor(Math.random() * SPINNER_VERBS.length)];

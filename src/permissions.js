@@ -85,12 +85,25 @@ function formatDetails(details, { skipFirst = false, maxLines = 6 } = {}) {
     return lines;
 }
 
+function formatWhyLines(why) {
+    const text = String(why || '').trim();
+    if (!text) return [];
+
+    const width = Math.max(20, getTermWidth() - 4);
+    return text
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean)
+        .flatMap(line => wrapText(line, width))
+        .slice(0, 4);
+}
+
 function splitArrow(details) {
     const [source, destination] = String(details || '').split('→').map(part => part.trim());
     return { source, destination };
 }
 
-function getNewUiPermissionCopy(actionType, details) {
+function getNewUiPermissionCopy(actionType, details, options = {}) {
     const target = firstDetailLine(details);
 
     if (actionType === 'Write File' || actionType === 'Patch File') {
@@ -155,7 +168,8 @@ function getNewUiPermissionCopy(actionType, details) {
             question: 'Do you want to run this command?',
             once: 'Yes, run this command',
             session: 'Yes, allow shell commands this session',
-            disallow: 'No, do not run it'
+            disallow: 'No, do not run it',
+            whyLines: formatWhyLines(options.why)
         };
     }
     if (actionType === 'Execute Interactive Command') {
@@ -165,7 +179,8 @@ function getNewUiPermissionCopy(actionType, details) {
             question: 'Do you want to start this interactive command?',
             once: 'Yes, start terminal session',
             session: 'Yes, allow terminal commands this session',
-            disallow: 'No, do not start it'
+            disallow: 'No, do not start it',
+            whyLines: formatWhyLines(options.why)
         };
     }
     if (actionType === 'Rename File') {
@@ -246,6 +261,16 @@ function getNewUiPermissionCopy(actionType, details) {
             detailLines: formatDetails(details, { skipFirst: true, maxLines: 5 })
         };
     }
+    if (actionType === 'Change Banana Code Setting') {
+        return {
+            title: 'Change Banana Code setting',
+            target,
+            question: 'This could change your Banana Code settings. Review carefully before approving.',
+            once: 'Yes, change setting',
+            disallow: 'No, do not change it',
+            detailLines: formatDetails(details, { skipFirst: true, maxLines: 8 })
+        };
+    }
 
     return {
         title: actionType,
@@ -258,12 +283,17 @@ function getNewUiPermissionCopy(actionType, details) {
     };
 }
 
-function formatNewUiChoices(copy) {
-    return [
-        { name: `1. ${copy.once}`, value: 'once' },
-        { name: `2. ${copy.session}`, value: 'session' },
-        { name: `3. ${copy.disallow}`, value: 'disallow' }
+function formatNewUiChoices(copy, options = {}) {
+    const choices = [
+        { name: `1. ${copy.once}`, value: 'once' }
     ];
+
+    if (options.allowSession !== false && copy.session) {
+        choices.push({ name: `${choices.length + 1}. ${copy.session}`, value: 'session' });
+    }
+
+    choices.push({ name: `${choices.length + 1}. ${copy.disallow}`, value: 'disallow' });
+    return choices;
 }
 
 function renderNewUiChoice(copy, choices, selectedIndex) {
@@ -276,6 +306,11 @@ function renderNewUiChoice(copy, choices, selectedIndex) {
         if (copy.target) lines.push(` ${truncatePlain(copy.target, Math.max(20, width - 2))}`);
         const detailLines = copy.detailLines || [];
         if (detailLines.length > 0) lines.push(...detailLines);
+        const whyLines = copy.whyLines || [];
+        if (whyLines.length > 0) {
+            lines.push(' 🍌 Why');
+            lines.push(...whyLines.map(line => `   ${truncatePlain(line, Math.max(20, width - 4))}`));
+        }
         lines.push(chalk.gray('╌'.repeat(width)));
     }
 
@@ -289,9 +324,9 @@ function renderNewUiChoice(copy, choices, selectedIndex) {
     return lines.map(line => padLine(line, width));
 }
 
-async function promptNewUiPermissionChoice(actionType, details, signal = undefined) {
-    const copy = getNewUiPermissionCopy(actionType, details);
-    const choices = formatNewUiChoices(copy);
+async function promptNewUiPermissionChoice(actionType, details, signal = undefined, options = {}) {
+    const copy = getNewUiPermissionCopy(actionType, details, options);
+    const choices = formatNewUiChoices(copy, options);
 
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
         return await select({
@@ -362,7 +397,9 @@ async function promptNewUiPermissionChoice(actionType, details, signal = undefin
                 return;
             }
             if (str === '\x1b[Z') {
-                finish('session');
+                if (choices.some(choice => choice.value === 'session')) {
+                    finish('session');
+                }
                 return;
             }
             if (str === '\r' || str === '\n') {
@@ -379,8 +416,9 @@ async function promptNewUiPermissionChoice(actionType, details, signal = undefin
                 draw();
                 return;
             }
-            if (/^[1-3]$/.test(str)) {
-                finish(choices[Number(str) - 1].value);
+            if (/^[1-9]$/.test(str)) {
+                const choice = choices[Number(str) - 1];
+                if (choice) finish(choice.value);
             }
         }
 
@@ -393,9 +431,9 @@ async function promptNewUiPermissionChoice(actionType, details, signal = undefin
     });
 }
 
-async function promptPermissionChoice(actionType, details, signal = undefined) {
+async function promptPermissionChoice(actionType, details, signal = undefined, options = {}) {
     if (isNewUiEnabled()) {
-        return await promptNewUiPermissionChoice(actionType, details, signal);
+        return await promptNewUiPermissionChoice(actionType, details, signal, options);
     }
 
     const boxWidth = 41; // Internal width
@@ -416,10 +454,16 @@ async function promptPermissionChoice(actionType, details, signal = undefined) {
 │  🍌 BANANA CODE — Permission Request    │
 ├─────────────────────────────────────────┤
 │ ${actionLine} │`);
-    const boxBottom = chalk.magenta(`├─────────────────────────────────────────┤
+    const allowSession = options.allowSession !== false;
+    const boxBottom = allowSession
+        ? chalk.magenta(`├─────────────────────────────────────────┤
 │  [1] Allow Once                         │
 │  [2] Allow for This Session             │
 │  [3] Disallow (suggest changes)         │
+└─────────────────────────────────────────┘`)
+        : chalk.magenta(`├─────────────────────────────────────────┤
+│  [1] Allow Once                         │
+│  [2] Disallow (suggest changes)         │
 └─────────────────────────────────────────┘`);
 
     console.log(boxTop);
@@ -427,10 +471,12 @@ async function promptPermissionChoice(actionType, details, signal = undefined) {
     console.log(boxBottom);
 
     const choices = [
-        { name: 'Allow Once', value: 'once' },
-        { name: 'Allow for This Session', value: 'session' },
-        { name: 'Disallow (suggest changes)', value: 'disallow' }
+        { name: 'Allow Once', value: 'once' }
     ];
+    if (allowSession) {
+        choices.push({ name: 'Allow for This Session', value: 'session' });
+    }
+    choices.push({ name: 'Disallow (suggest changes)', value: 'disallow' });
 
     return await select({
         message: chalk.magenta('Select an option:'),
@@ -438,31 +484,32 @@ async function promptPermissionChoice(actionType, details, signal = undefined) {
     }, signal ? { signal } : undefined);
 }
 
-export async function requestPermission(actionType, details) {
+export async function requestPermission(actionType, details, options = {}) {
     if (global.bananaYoloMode || process.argv.includes('--yolo')) {
         return { allowed: true };
     }
 
+    const manualOnly = options.manualOnly === true;
     const goalsMode = global.goalsPermissionMode;
     const autoAcceptEditsMode = global.bananaAutoAcceptEditsMode === true;
     const isGoalsCommand = GOALS_COMMAND_ACTIONS.has(actionType);
     const isSensitiveRemoteAction = SENSITIVE_REMOTE_ACTIONS.has(actionType);
-    if (!isSensitiveRemoteAction && goalsMode === 'all') {
+    if (!manualOnly && !isSensitiveRemoteAction && goalsMode === 'all') {
         console.log(chalk.green(`🎯 [Goals] Auto-approved: ${chalk.gray(actionType)}`));
         return { allowed: true };
     }
-    if (!isSensitiveRemoteAction && goalsMode === 'edits' && GOALS_AUTO_ACTIONS.has(actionType)) {
+    if (!manualOnly && !isSensitiveRemoteAction && goalsMode === 'edits' && GOALS_AUTO_ACTIONS.has(actionType)) {
         console.log(chalk.green(`🎯 [Goals] Auto-approved: ${chalk.gray(actionType)}`));
         return { allowed: true };
     }
-    if (!isSensitiveRemoteAction && autoAcceptEditsMode && GOALS_AUTO_ACTIONS.has(actionType)) {
-        console.log(chalk.yellow(`⏵⏵ [Auto Accept Edits] Approved: ${chalk.gray(actionType)}`));
+    if (!manualOnly && !isSensitiveRemoteAction && autoAcceptEditsMode && GOALS_AUTO_ACTIONS.has(actionType)) {
+        console.log(chalk.yellow(`● [Auto Accept Edits] Approved: ${chalk.gray(actionType)}`));
         return { allowed: true };
     }
 
     const permKey = `allow_session_${actionType}`;
 
-    if (sessionPermissions.has(permKey)) {
+    if (!manualOnly && options.allowSession !== false && sessionPermissions.has(permKey)) {
         return { allowed: true };
     }
 
@@ -470,7 +517,7 @@ export async function requestPermission(actionType, details) {
     const config = global.bananaConfig;
     const createProvider = global.createProvider;
     
-    if (config && config.useBananaGuard !== false && !isSensitiveRemoteAction && !((goalsMode === 'edits' || autoAcceptEditsMode) && isGoalsCommand)) {
+    if (!manualOnly && config && config.useBananaGuard !== false && !isSensitiveRemoteAction && !((goalsMode === 'edits' || autoAcceptEditsMode) && isGoalsCommand)) {
         // Only commands and URLs get AI scrutiny
         if (actionType === 'Execute Command' || actionType === 'Execute Interactive Command' || actionType === 'Fetch URL') {
             if (createProvider) {
@@ -499,14 +546,14 @@ export async function requestPermission(actionType, details) {
     if (typeof global.apiPermissionHandler === 'function') {
         const ticketId = crypto.randomUUID();
         const controller = new AbortController();
-        const remoteApproval = global.apiPermissionHandler(ticketId, actionType, details);
+        const remoteApproval = global.apiPermissionHandler(ticketId, actionType, details, options);
 
         const winner = await Promise.race([
             remoteApproval.then(result => {
                 controller.abort();
                 return { source: 'remote', result };
             }),
-            promptPermissionChoice(actionType, details, controller.signal)
+            promptPermissionChoice(actionType, details, controller.signal, options)
                 .then(choice => ({ source: 'local', choice }))
                 .catch(err => {
                     if (err?.name === 'AbortPromptError' || err?.name === 'ExitPromptError') {
@@ -517,7 +564,7 @@ export async function requestPermission(actionType, details) {
         ]);
 
         if (winner.source === 'remote') {
-            if (winner.result.remember) {
+            if (winner.result.remember && options.allowSession !== false && !manualOnly) {
                 rememberSessionPermission(actionType, permKey);
             }
             console.log(winner.result.allowed
@@ -533,7 +580,7 @@ export async function requestPermission(actionType, details) {
         const choice = winner.choice;
 
         if (choice === 'once') return { allowed: true };
-        if (choice === 'session') {
+        if (choice === 'session' && options.allowSession !== false && !manualOnly) {
             rememberSessionPermission(actionType, permKey);
             return { allowed: true };
         }
@@ -541,10 +588,10 @@ export async function requestPermission(actionType, details) {
         return { allowed: false };
     }
 
-    const choice = await promptPermissionChoice(actionType, details);
+    const choice = await promptPermissionChoice(actionType, details, undefined, options);
 
     if (choice === 'once') return { allowed: true };
-    if (choice === 'session') {
+    if (choice === 'session' && options.allowSession !== false && !manualOnly) {
         rememberSessionPermission(actionType, permKey);
         return { allowed: true };
     }

@@ -45,6 +45,7 @@ export async function delegateTask({ task, agentType = 'generalist', contextFile
         const { QwenProvider } = await import('../providers/qwen.js');
         const { OllamaProvider } = await import('../providers/ollama.js');
         const { OllamaCloudProvider } = await import('../providers/ollamaCloud.js');
+        const { LlamaCppProvider } = await import('../providers/llamacpp.js');
 
         const createSubProvider = (cfg) => {
             switch (cfg.provider) {
@@ -57,6 +58,7 @@ export async function delegateTask({ task, agentType = 'generalist', contextFile
                 case 'qwen': return new QwenProvider(cfg);
                 case 'ollama_cloud': return new OllamaCloudProvider(cfg);
                 case 'ollama': return new OllamaProvider(cfg);
+                case 'llamacpp': return new LlamaCppProvider(cfg);
                 default: return new OllamaProvider(cfg);
             }
         };

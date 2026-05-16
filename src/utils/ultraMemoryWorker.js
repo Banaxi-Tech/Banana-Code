@@ -6,6 +6,7 @@ import { ClaudeProvider } from '../providers/claude.js';
 import { OpenAIProvider } from '../providers/openai.js';
 import { OllamaProvider } from '../providers/ollama.js';
 import { OllamaCloudProvider } from '../providers/ollamaCloud.js';
+import { LlamaCppProvider } from '../providers/llamacpp.js';
 import { MistralProvider } from '../providers/mistral.js';
 import { OpenRouterProvider } from '../providers/openrouter.js';
 import { DeepSeekProvider } from '../providers/deepseek.js';
@@ -63,6 +64,7 @@ async function run() {
             case 'openrouter': return new OpenRouterProvider(silentConfig);
             case 'ollama_cloud': return new OllamaCloudProvider(silentConfig);
             case 'ollama': return new OllamaProvider(silentConfig);
+            case 'llamacpp': return new LlamaCppProvider(silentConfig);
             default: return new OllamaProvider(silentConfig);
         }
     }

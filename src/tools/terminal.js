@@ -60,8 +60,8 @@ export function cleanupTerminalSessions() {
 /**
  * Executes a command in a persistent terminal session.
  */
-export async function executeCommandInTerminal({ command, cwd = process.cwd() }) {
-    const perm = await requestPermission('Execute Interactive Command', command);
+export async function executeCommandInTerminal({ command, cwd = process.cwd(), why = '' }) {
+    const perm = await requestPermission('Execute Interactive Command', command, { why });
     if (!perm.allowed) {
         return `User denied permission to execute: ${command}`;
     }

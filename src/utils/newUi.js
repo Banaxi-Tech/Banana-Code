@@ -4,7 +4,7 @@
 import chalk from 'chalk';
 
 const TOOL_LABELS = {
-    execute_command: 'Bash',
+    execute_command: 'RunCommand',
     execute_command_in_terminal: 'Terminal',
     send_to_terminal: 'TerminalInput',
     terminate_terminal_session: 'TerminateTerminal',
@@ -40,6 +40,7 @@ const TOOL_LABELS = {
     github_add_issue_comment: 'GitHubComment',
     github_create_pull_request_review: 'GitHubReview',
     github_merge_pull_request: 'GitHubMerge',
+    change_banana_setting: 'Settings',
     request_model_switch: 'ModelSwitch',
     browser_open: 'BrowserOpen',
     browser_snapshot: 'BrowserSnapshot',
@@ -125,6 +126,8 @@ function toolTarget(name, args = {}) {
         case 'duck_duck_go':
         case 'duck_duck_go_scrape':
             return compact(args.query, 90);
+        case 'change_banana_setting':
+            return compact(`${args.enabled ? 'enable' : 'disable'} ${args.setting || ''}`, 90);
         case 'activate_skill':
             return compact(args.skillName, 60);
         case 'delegate_task':

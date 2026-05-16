@@ -216,14 +216,19 @@ export async function connectRemoteTooling(credentials, handlers = {}) {
     socket.on('disconnect', () => { isConnected = false; });
     socket.on('error', (err) => { console.log(chalk.red(`\n[Remote Tooling] Error: ${err}`)); });
 
-    global.apiPermissionHandler = async (ticketId, actionType, details) => {
+    global.apiPermissionHandler = async (ticketId, actionType, details, options = {}) => {
         finalizeTurn();
         if (!isConnected) return { allowed: false };
 
         return new Promise((resolve) => {
             console.log(chalk.yellow(`\n[Remote Tooling] Waiting for Mobile App approval...`));
             pendingRequests.set(ticketId, resolve);
-            const reqData = { id: ticketId, actionType, details };
+            const reqData = {
+                id: ticketId,
+                actionType,
+                details,
+                allowSession: options.allowSession !== false
+            };
             socket.emit('tool_request', reqData);
         });
     };

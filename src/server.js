@@ -27,6 +27,7 @@ const PROVIDER_REINIT_KEYS = new Set([
     'model',
     'apiKey',
     'qwenBaseUrl',
+    'llamaCppBaseUrl',
     'betaTools',
     'usePatchFile',
     'useMemory',
@@ -44,7 +45,7 @@ const PROVIDER_REINIT_KEYS = new Set([
     'openaiCodexEffort'
 ]);
 
-const LOCAL_BANANA_SPLIT_PROVIDERS = new Set(['ollama', 'lmstudio']);
+const LOCAL_BANANA_SPLIT_PROVIDERS = new Set(['ollama', 'lmstudio', 'llamacpp']);
 const REVIEWER_BANANA_SPLIT_PROVIDERS = new Set(['gemini', 'claude', 'openai', 'mistral', 'deepseek', 'kimi', 'qwen', 'openrouter', 'ollama_cloud']);
 const IMAGE_EXTENSIONS = new Map([
     ['.png', 'image/png'],
@@ -184,7 +185,7 @@ function buildPendingUserMessage(providerId, input = {}, config = {}) {
         return { role: 'user', content };
     }
 
-    if (['openai', 'mistral', 'deepseek', 'kimi', 'qwen'].includes(providerId) && config.authType !== 'oauth') {
+    if (['openai', 'mistral', 'deepseek', 'kimi', 'qwen', 'llamacpp', 'lmstudio'].includes(providerId) && config.authType !== 'oauth') {
         const content = [{ type: 'text', text }];
         for (const img of images) {
             content.push({
@@ -387,7 +388,7 @@ function normalizeBananaSplitConfig(input = {}, currentConfig = {}) {
     const localProvider = localInput?.provider;
     const reviewerProvider = reviewerInput?.provider;
     if (!LOCAL_BANANA_SPLIT_PROVIDERS.has(localProvider)) {
-        throw new Error('BananaSplit local provider must be ollama or lmstudio.');
+        throw new Error('BananaSplit local provider must be ollama, lmstudio, or llamacpp.');
     }
     if (!REVIEWER_BANANA_SPLIT_PROVIDERS.has(reviewerProvider)) {
         throw new Error('BananaSplit reviewer provider must be one of gemini, claude, openai, mistral, deepseek, kimi, qwen, openrouter, ollama_cloud.');
@@ -506,6 +507,11 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
     let ultraMemoryInterval = null;
     global.bananaConfig = config;
 
+    const getBaseApiRuntimeConfig = () => ({
+        ...config,
+        isApiMode: true
+    });
+
     const parseVoiceUpload = (req, res, next) => {
         if (req.is('multipart/form-data')) {
             upload.single('file')(req, res, next);
@@ -522,6 +528,7 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
         if (!providerInstance) {
             providerInstance = createProviderForConfig(createProvider, config);
         }
+        global.activeProviderInstance = providerInstance;
 
         providerInstance.config.isApiMode = true;
         providerInstance.onChunk = null;
@@ -564,6 +571,33 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
             ultraMemoryInterval = setInterval(() => runUltraMemoryBackground(config, createProvider), 60000);
             await runUltraMemoryBackground(config, createProvider);
         }
+    };
+
+    global.applyBananaConfigUpdate = async (updates = {}) => {
+        const previousBetaTools = config.betaTools || [];
+        const previousUltraMemory = config.useUltraMemory;
+        config = { ...config, ...updates };
+        global.bananaConfig = config;
+
+        if (updates.betaTools !== undefined) {
+            await syncBetaFeatureSideEffects(previousBetaTools, config.betaTools || []);
+        }
+
+        const runtimeConfig = getBaseApiRuntimeConfig();
+        if (providerInstance?.config) {
+            providerInstance.config = { ...providerInstance.config, ...runtimeConfig, ...updates };
+            await refreshSystemPrompt(providerInstance, runtimeConfig);
+        }
+
+        if (updates.useUltraMemory !== undefined && config.useUltraMemory && !previousUltraMemory && !config.ultraMemoryEnabledAt) {
+            config.ultraMemoryEnabledAt = new Date().toISOString();
+        }
+        if (updates.useUltraMemory !== undefined) {
+            await updateUltraMemoryBackground(previousUltraMemory, config.useUltraMemory);
+        }
+
+        await saveConfig(config);
+        return config;
     };
 
     if (config.useUltraMemory) {
@@ -613,13 +647,14 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
         };
 
         // Setup session-scoped permission handler for API mode
-        const sessionPermissionHandler = (ticketId, actionType, details) => {
+        const sessionPermissionHandler = (ticketId, actionType, details, options = {}) => {
             return new Promise((resolve) => {
                 const requestPayload = JSON.stringify({
                     type: 'permission_requested',
                     ticketId,
                     action: actionType,
-                    details
+                    details,
+                    allowSession: options.allowSession !== false
                 });
                 
                 if (ws.readyState === ws.OPEN) {
@@ -640,7 +675,7 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                             console.log(chalk.gray(`[API] Received permission response for ${ticketId}: ${data.allowed}`));
                             activeTickets.delete(ticketId);
                             ws.removeListener('message', responseHandler); // clean up
-                            resolve({ allowed: data.allowed, remember: data.session });
+                            resolve({ allowed: data.allowed, remember: options.allowSession !== false && data.session });
                         }
                     } catch (e) {}
                 };
@@ -1150,6 +1185,7 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                         console.log(chalk.gray(`[API] Creating provider instance...`));
                         providerInstance = createProviderForConfig(createProvider, getApiRuntimeConfig());
                     }
+                    global.activeProviderInstance = providerInstance;
 
                     const activeProviderConfig = getBananaSplitLocalConfig(getApiRuntimeConfig());
                     const ultrathinkDirective = extractUltrathinkDirective(effectiveUserText);

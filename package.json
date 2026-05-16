@@ -12,7 +12,8 @@
         "gemini",
         "claude",
         "openai",
-        "ollama"
+        "ollama",
+        "llama.cpp"
     ],
     "type": "module",
     "license": "GPL-3.0-or-later",

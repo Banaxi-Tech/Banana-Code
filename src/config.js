@@ -17,6 +17,7 @@ const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 const PROJECT_LOCAL_SETTINGS_RELATIVE_PATH = path.join('.banana', 'settings.local.json');
 const PROJECT_LOCAL_CONFIG_METADATA = Symbol('projectLocalConfigMetadata');
 export const DEFAULT_IMAGEGEN_BASE_URL = 'http://127.0.0.1:8000';
+export const DEFAULT_LLAMACPP_BASE_URL = 'http://127.0.0.1:8080/v1';
 
 function isPlainObject(value) {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -216,6 +217,10 @@ export function copyBananaSplitProviderConfig(provider, providerConfig) {
         result.lmStudioBaseUrl = providerConfig.lmStudioBaseUrl;
     }
 
+    if (provider === 'llamacpp') {
+        result.llamaCppBaseUrl = providerConfig.llamaCppBaseUrl;
+    }
+
     if (provider === 'qwen') {
         result.qwenBaseUrl = providerConfig.qwenBaseUrl;
     }
@@ -278,6 +283,28 @@ export function getBananaSplitReviewerConfig(config) {
 export function normalizeImageGenBaseUrl(baseUrl = DEFAULT_IMAGEGEN_BASE_URL) {
     const trimmed = String(baseUrl || DEFAULT_IMAGEGEN_BASE_URL).trim();
     return trimmed.replace(/\/+$/, '');
+}
+
+export function normalizeLlamaCppBaseUrl(baseUrl = DEFAULT_LLAMACPP_BASE_URL) {
+    const trimmed = String(baseUrl || DEFAULT_LLAMACPP_BASE_URL).trim().replace(/\/+$/, '');
+    return trimmed.endsWith('/v1') ? trimmed : `${trimmed}/v1`;
+}
+
+export async function listLlamaCppModels(baseUrl = DEFAULT_LLAMACPP_BASE_URL) {
+    const normalizedBaseUrl = normalizeLlamaCppBaseUrl(baseUrl);
+    const response = await fetch(`${normalizedBaseUrl}/models`);
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+        const message = data.error?.message || data.error || response.statusText;
+        throw new Error(`llama.cpp model discovery failed at ${normalizedBaseUrl}: ${message}`);
+    }
+
+    const models = Array.isArray(data.data)
+        ? data.data.map(model => model?.id).filter(Boolean)
+        : [];
+
+    return { baseUrl: normalizedBaseUrl, models };
 }
 
 export async function listImageGenModels(baseUrl = DEFAULT_IMAGEGEN_BASE_URL) {
@@ -352,7 +379,8 @@ export async function setupBananaSplit(config = {}) {
         message: 'Select the local model provider BananaSplit should use for coding:',
         choices: [
             { name: 'Ollama (Local)', value: 'ollama' },
-            { name: 'LM Studio (Local)', value: 'lmstudio' }
+            { name: 'LM Studio (Local)', value: 'lmstudio' },
+            { name: 'llama.cpp Server (Local)', value: 'llamacpp' }
         ],
         default: existing.local?.provider || 'ollama',
         loop: false
@@ -361,7 +389,8 @@ export async function setupBananaSplit(config = {}) {
     const localSetup = await setupProvider(localProvider, {
         provider: localProvider,
         model: existing.local?.model,
-        lmStudioBaseUrl: existing.local?.lmStudioBaseUrl || config.lmStudioBaseUrl
+        lmStudioBaseUrl: existing.local?.lmStudioBaseUrl || config.lmStudioBaseUrl,
+        llamaCppBaseUrl: existing.local?.llamaCppBaseUrl || config.llamaCppBaseUrl
     });
 
     const reviewerChoices = [
@@ -724,6 +753,34 @@ export async function setupProvider(provider, config = {}) {
             console.log(chalk.red(`Could not connect to LM Studio at ${config.lmStudioBaseUrl}.`));
             config.model = await input({ message: 'Fallback model name to configure:', default: config.model || 'model-identifier' });
         }
+    } else if (provider === 'llamacpp') {
+        console.log(chalk.cyan('Start llama.cpp with `llama-server`, then enter its OpenAI-compatible base URL.'));
+        config.llamaCppBaseUrl = normalizeLlamaCppBaseUrl(await input({
+            message: 'Enter your llama.cpp server base URL:',
+            default: config.llamaCppBaseUrl || DEFAULT_LLAMACPP_BASE_URL,
+            validate: (value) => String(value || '').trim().length > 0 || 'Base URL cannot be empty'
+        }));
+
+        console.log(chalk.cyan(`Detecting llama.cpp models at ${config.llamaCppBaseUrl}...`));
+        const fallbackLlamaCppModel = config.model && config.model !== 'auto' ? config.model : 'default';
+        try {
+            const discovery = await listLlamaCppModels(config.llamaCppBaseUrl);
+            const models = discovery.models;
+            if (models.length > 0) {
+                config.model = await select({
+                    message: 'Select a llama.cpp model:',
+                    choices: models.map(m => ({ name: m, value: m })),
+                    default: config.model && config.model !== 'auto' ? config.model : undefined,
+                    loop: false
+                });
+            } else {
+                console.log(chalk.yellow('No models found. Start llama-server with a GGUF model or alias, then try /model later.'));
+                config.model = await input({ message: 'Fallback model name to configure:', default: fallbackLlamaCppModel });
+            }
+        } catch (error) {
+            console.log(chalk.red(`Could not connect to llama.cpp at ${config.llamaCppBaseUrl}: ${error.message}`));
+            config.model = await input({ message: 'Fallback model name to configure:', default: fallbackLlamaCppModel });
+        }
     } else if (provider === 'ollama') {
         console.log(chalk.cyan("Detecting running Ollama models..."));
         try {
@@ -784,7 +841,8 @@ async function runSetupWizard() {
             { name: 'OpenRouter (Any Model)', value: 'openrouter' },
             { name: 'Ollama Cloud', value: 'ollama_cloud' },
             { name: 'Ollama (Local)', value: 'ollama' },
-            { name: 'LM Studio (Local)', value: 'lmstudio' }
+            { name: 'LM Studio (Local)', value: 'lmstudio' },
+            { name: 'llama.cpp Server (Local)', value: 'llamacpp' }
         ],
         loop: false,
         pageSize: 10

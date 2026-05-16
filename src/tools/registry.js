@@ -22,6 +22,7 @@ import { generateImage } from './imageGen.js';
 import { requestModelSwitch } from './modelSwitch.js';
 import { askUserQuestions } from './askUserQuestions.js';
 import { createPlan } from './createPlan.js';
+import { changeBananaSetting } from './changeBananaSetting.js';
 import {
     githubApiRequest,
     githubListRepositories,
@@ -177,7 +178,8 @@ export const TOOLS = [
             type: 'object',
             properties: {
                 command: { type: 'string', description: 'The shell command to run' },
-                cwd: { type: 'string', description: 'The directory to run in (optional)' }
+                cwd: { type: 'string', description: 'The directory to run in (optional)' },
+                why: { type: 'string', description: 'Short user-facing explanation of what the command does and why it is needed. Include this for every non-obvious command; omit only for universally obvious commands such as simple ls or pwd.' }
             },
             required: ['command']
         }
@@ -189,7 +191,8 @@ export const TOOLS = [
             type: 'object',
             properties: {
                 command: { type: 'string', description: 'The command to run' },
-                cwd: { type: 'string', description: 'The directory to run in (optional)' }
+                cwd: { type: 'string', description: 'The directory to run in (optional)' },
+                why: { type: 'string', description: 'Short user-facing explanation of what the command does and why it is needed. Include this for every non-obvious command; omit only for universally obvious commands such as simple ls or pwd.' }
             },
             required: ['command']
         }
@@ -732,6 +735,38 @@ export const TOOLS = [
         }
     },
     {
+        name: 'change_banana_setting',
+        label: 'Change Banana Code Setting',
+        description: 'Enable or disable a whitelisted Banana Code setting, such as DuckDuckGo search. This always asks the user to review the requested setting change and is not auto-approved unless YOLO mode is enabled.',
+        parameters: {
+            type: 'object',
+            properties: {
+                setting: {
+                    type: 'string',
+                    enum: [
+                        'duck_duck_go',
+                        'duck_duck_go_scrape',
+                        'usePuppeteerFetch',
+                        'usePatchFile',
+                        'useMemory',
+                        'useBananaGuard',
+                        'autoFeedWorkspace'
+                    ],
+                    description: 'The Banana Code setting to change.'
+                },
+                enabled: {
+                    type: 'boolean',
+                    description: 'Set true to enable the setting or false to disable it.'
+                },
+                reason: {
+                    type: 'string',
+                    description: 'Brief user-facing reason for changing this setting.'
+                }
+            },
+            required: ['setting', 'enabled', 'reason']
+        }
+    },
+    {
         name: MODEL_SWITCH_TOOL_NAME,
         label: 'Request Model Switch',
         description: 'Recommend switching to another model for the current provider. This pauses for user approval before switching; if declined, continue with the current model.',
@@ -795,7 +830,7 @@ export function getAvailableTools(config = {}) {
             if (!allowedForBananaSplitReview.includes(tool.name)) return false;
         }
         if (config.askMode) {
-            const forbiddenInAskMode = ['write_file', 'patch_file'];
+            const forbiddenInAskMode = ['write_file', 'patch_file', 'change_banana_setting'];
             if (forbiddenInAskMode.includes(tool.name)) return false;
         }
         if (config.deepReviewMode === 'full' || config.deepReviewMode === 'diff') {
@@ -864,6 +899,64 @@ export function sanitizeSchemaForStrictAPIs(schema) {
     return sanitized;
 }
 
+function mapToolForActiveProvider(tool, providerName) {
+    if (providerName === 'ClaudeProvider') {
+        return {
+            name: tool.name,
+            description: tool.description,
+            input_schema: tool.parameters
+        };
+    }
+
+    if (providerName === 'GeminiProvider') {
+        return {
+            name: tool.name,
+            description: tool.description,
+            parameters: sanitizeSchemaForStrictAPIs(tool.parameters)
+        };
+    }
+
+    const strictOpenAiStyleProviders = new Set([
+        'OllamaProvider',
+        'OllamaCloudProvider',
+        'LMStudioProvider',
+        'LlamaCppProvider'
+    ]);
+    const parameters = strictOpenAiStyleProviders.has(providerName)
+        ? sanitizeSchemaForStrictAPIs(tool.parameters)
+        : tool.parameters;
+
+    return {
+        type: 'function',
+        function: {
+            name: tool.name,
+            description: tool.description,
+            parameters
+        }
+    };
+}
+
+async function refreshActiveProviderTools(config = {}) {
+    const provider = global.activeProviderInstance;
+    if (!provider) return;
+
+    const runtimeConfig = {
+        ...(provider.config || {}),
+        ...config
+    };
+    provider.config = runtimeConfig;
+
+    if (Array.isArray(provider.tools)) {
+        const providerName = provider.constructor?.name || '';
+        provider.tools = getAvailableTools(runtimeConfig).map(tool => mapToolForActiveProvider(tool, providerName));
+    }
+
+    if (typeof provider.updateSystemPrompt === 'function') {
+        const { getSystemPrompt } = await import('../prompt.js');
+        provider.updateSystemPrompt(getSystemPrompt(runtimeConfig));
+    }
+}
+
 export async function executeTool(name, args, config) {
     printNewUiToolCall(name, args, config);
 
@@ -921,6 +1014,11 @@ export async function executeTool(name, args, config) {
         case 'github_create_pull_request_review': return await githubCreatePullRequestReview(args, config);
         case 'github_merge_pull_request': return await githubMergePullRequest(args, config);
         case 'generate_image': return await generateImage(args, config);
+        case 'change_banana_setting': {
+            const result = await changeBananaSetting(args, config);
+            await refreshActiveProviderTools(config);
+            return result;
+        }
         case 'browser_open': return await browserOpen(args, config);
         case 'browser_snapshot': return await browserSnapshot(args, config);
         case 'browser_click': return await browserClick(args, config);

@@ -5,7 +5,7 @@ import readline from 'readline';
 import { spawn } from 'child_process';
 import chalk from 'chalk';
 import ora from 'ora';
-import { confirmProjectLocalSettingsTrust, getBananaSplitLocalConfig, loadConfig, saveConfig, setupBananaSplit, setupImageGen, setupProvider } from './config.js';
+import { confirmProjectLocalSettingsTrust, getBananaSplitLocalConfig, listLlamaCppModels, loadConfig, saveConfig, setupBananaSplit, setupImageGen, setupProvider } from './config.js';
 import { runStartup } from './startup.js';
 import { getSessionPermissions, setAutoAcceptEditsMode, setGoalsPermissionMode, setYoloMode } from './permissions.js';
 import { cleanupTerminalSessions } from './tools/terminal.js';
@@ -15,6 +15,7 @@ import { GeminiProvider } from './providers/gemini.js';
 import { ClaudeProvider } from './providers/claude.js';
 import { OpenAIProvider } from './providers/openai.js';
 import { LMStudioProvider } from './providers/lmstudio.js';
+import { LlamaCppProvider } from './providers/llamacpp.js';
 import { OllamaProvider } from './providers/ollama.js';
 import { OllamaCloudProvider } from './providers/ollamaCloud.js';
 import { MistralProvider } from './providers/mistral.js';
@@ -76,6 +77,7 @@ function createProvider(overrideConfig = null) {
         case 'ollama_cloud': return new OllamaCloudProvider(activeConfig);
         case 'ollama': return new OllamaProvider(activeConfig);
         case 'lmstudio': return new LMStudioProvider(activeConfig);
+        case 'llamacpp': return new LlamaCppProvider(activeConfig);
         default:
             console.log(chalk.red(`Unknown provider: ${activeConfig.provider}. Defaulting to Ollama.`));
             activeConfig.provider = 'ollama';
@@ -266,7 +268,8 @@ const IMAGE_ATTACHMENT_PROVIDERS = new Set([
     'openrouter',
     'ollama_cloud',
     'ollama',
-    'lmstudio'
+    'lmstudio',
+    'llamacpp'
 ]);
 
 let userTurnQueue = Promise.resolve();
@@ -901,7 +904,8 @@ async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {
                     { name: 'OpenRouter (Any Model)', value: 'openrouter' },
                     { name: 'Ollama Cloud', value: 'ollama_cloud' },
                     { name: 'Ollama (Local)', value: 'ollama' },
-                    { name: 'LM Studio (Local)', value: 'lmstudio' }
+                    { name: 'LM Studio (Local)', value: 'lmstudio' },
+                    { name: 'llama.cpp Server (Local)', value: 'llamacpp' }
                 ];
                 
                 // Add dynamic plugin providers
@@ -917,7 +921,7 @@ async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {
                 });
             }
 
-            const isDefaultProv = ['gemini', 'claude', 'openai', 'mistral', 'deepseek', 'kimi', 'qwen', 'openrouter', 'ollama_cloud', 'ollama', 'lmstudio'].includes(newProv);
+            const isDefaultProv = ['gemini', 'claude', 'openai', 'mistral', 'deepseek', 'kimi', 'qwen', 'openrouter', 'ollama_cloud', 'ollama', 'lmstudio', 'llamacpp'].includes(newProv);
             const isPluginProv = pluginRegistry.providers[newProv] !== undefined;
 
             if (isDefaultProv || isPluginProv) {
@@ -928,7 +932,7 @@ async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {
                 lastAssistantMessageText = '';
                 console.log(chalk.green(`Switched provider to ${newProv} (${config.model}).`));
             } else {
-                console.log(chalk.yellow(`Usage: /provider <gemini|claude|openai|mistral|deepseek|kimi|qwen|openrouter|ollama_cloud|ollama|lmstudio>`));
+                console.log(chalk.yellow(`Usage: /provider <gemini|claude|openai|mistral|deepseek|kimi|qwen|openrouter|ollama_cloud|ollama|lmstudio|llamacpp>`));
             }
             break;
         case '/copy': {
@@ -1000,6 +1004,16 @@ async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {
                         console.log(chalk.red("Could not connect to LM Studio."));
                         return;
                     }
+                } else if (activeModelProvider === 'llamacpp') {
+                    try {
+                        const discovery = await listLlamaCppModels(modelConfig.llamaCppBaseUrl);
+                        choices = discovery.models.length > 0
+                            ? discovery.models.map(m => ({ name: m, value: m }))
+                            : [{ name: chalk.magenta('✎ Enter custom model ID...'), value: 'CUSTOM_ID' }];
+                    } catch (e) {
+                        console.log(chalk.red(`Could not connect to llama.cpp: ${e.message}`));
+                        choices = [{ name: chalk.magenta('✎ Enter custom model ID...'), value: 'CUSTOM_ID' }];
+                    }
                 } else if (pluginRegistry.providers[activeModelProvider] && pluginRegistry.providers[activeModelProvider].ProviderClass) {
                     // Check if provider class has a static getModels method
                     const ProvClass = pluginRegistry.providers[activeModelProvider].ProviderClass;
@@ -1016,7 +1030,10 @@ async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {
 
                 if (choices.length > 0) {
                     const finalChoices = [...choices];
-                    if (activeModelProvider === 'ollama_cloud' || activeModelProvider === 'mistral' || activeModelProvider === 'deepseek' || activeModelProvider === 'kimi' || activeModelProvider === 'qwen') {
+                    if (
+                        (activeModelProvider === 'ollama_cloud' || activeModelProvider === 'mistral' || activeModelProvider === 'deepseek' || activeModelProvider === 'kimi' || activeModelProvider === 'qwen' || activeModelProvider === 'llamacpp') &&
+                        !finalChoices.some(choice => choice.value === 'CUSTOM_ID')
+                    ) {
                         finalChoices.push({ name: chalk.magenta('✎ Enter custom model ID...'), value: 'CUSTOM_ID' });
                     }
 
@@ -1031,7 +1048,9 @@ async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {
                         const { input } = await import('@inquirer/prompts');
                         const exampleModel = activeModelProvider === 'deepseek'
                             ? 'deepseek-v4-flash'
-                            : activeModelProvider === 'mistral'
+                            : activeModelProvider === 'llamacpp'
+                                ? 'default'
+                                : activeModelProvider === 'mistral'
                                 ? 'mistral-large-latest'
                                 : activeModelProvider === 'kimi'
                                     ? 'kimi-k2.6'
@@ -2084,7 +2103,7 @@ async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {
         case '/help':
             console.log(chalk.yellow(`
 Available commands:
-  /provider <name> - Switch AI provider (gemini, claude, openai, mistral, deepseek, kimi, qwen, openrouter, ollama_cloud, ollama)
+  /provider <name> - Switch AI provider (gemini, claude, openai, mistral, deepseek, kimi, qwen, openrouter, ollama_cloud, ollama, lmstudio, llamacpp)
   /model [name]    - Switch model within current provider (opens menu if name omitted)
   /chats           - List persistent chat sessions
   /clear           - Clear chat history
@@ -2126,6 +2145,8 @@ Available commands:
 
 Shortcut:
   Shift+Tab       - Cycle default mode, auto accept edits, and plan mode
+  action@model   - Open the model menu before sending the current prompt
+  action@effort  - Open the effort menu before sending the current prompt (Claude/OpenAI Codex OAuth)
 `));
             if (Object.keys(pluginRegistry.commands).length > 0) {
                 console.log(chalk.cyan(`\nPlugin Commands:`));
@@ -2148,6 +2169,7 @@ Shortcut:
 
 let exitRequested = false;
 const REPROMPT_SIGNAL = Symbol('REPROMPT');
+const INLINE_PROMPT_ACTION_PATTERN = /\baction@(model|effort)\b/gi;
 
 // Background colors for the chat UI
 const userBg = chalk.bgRgb(30, 30, 46);       // Dark charcoal for user messages
@@ -2206,6 +2228,74 @@ function updateCurrentProviderPrompt() {
     global.bananaConfig = config;
 }
 
+function getInlinePromptActions(text) {
+    const actions = [];
+    const seen = new Set();
+    INLINE_PROMPT_ACTION_PATTERN.lastIndex = 0;
+    for (const match of String(text || '').matchAll(INLINE_PROMPT_ACTION_PATTERN)) {
+        const action = String(match[1] || '').toLowerCase();
+        if (!seen.has(action)) {
+            seen.add(action);
+            actions.push(action);
+        }
+    }
+    return actions;
+}
+
+function stripInlinePromptActions(text) {
+    INLINE_PROMPT_ACTION_PATTERN.lastIndex = 0;
+    return String(text || '')
+        .replace(INLINE_PROMPT_ACTION_PATTERN, '')
+        .replace(/[ \t]{2,}/g, ' ')
+        .replace(/\s+([,.;:!?])/g, '$1')
+        .trim();
+}
+
+function activeProviderSupportsEffortAction() {
+    const activeConfig = getBananaSplitLocalConfig(config || {});
+    return activeConfig.provider === 'claude' ||
+        (activeConfig.provider === 'openai' && activeConfig.authType === 'oauth');
+}
+
+async function applyInlinePromptActions(text) {
+    const actions = getInlinePromptActions(text);
+    if (actions.length === 0) return text;
+
+    for (const action of actions) {
+        if (action === 'model') {
+            await handleSlashCommand('/model', { runUserTurn: processUserTurn });
+            continue;
+        }
+
+        if (action === 'effort') {
+            if (!activeProviderSupportsEffortAction()) {
+                console.log(chalk.yellow('action@effort is only supported for Claude and OpenAI Codex OAuth.'));
+                continue;
+            }
+            await handleSlashCommand('/effort', { runUserTurn: processUserTurn });
+        }
+    }
+
+    return stripInlinePromptActions(text);
+}
+
+function enqueueInlinePromptTurn(text) {
+    return enqueueCliTask(async () => {
+        const cleanedText = await applyInlinePromptActions(text);
+        if (!cleanedText.trim()) return null;
+        return processUserTurn({ text: cleanedText, source: 'cli', titleSource: cleanedText });
+    });
+}
+
+global.applyBananaConfigUpdate = async (updates = {}) => {
+    Object.assign(config, updates);
+    await saveConfig(config);
+    global.bananaConfig = config;
+    if (providerInstance?.config) {
+        Object.assign(providerInstance.config, updates);
+    }
+};
+
 function applyPromptCycleMode(mode) {
     const nextMode = ['default', 'autoAcceptEdits', 'plan'].includes(mode) ? mode : 'default';
 
@@ -2235,13 +2325,13 @@ function formatPromptCycleIndicator() {
     const suffix = chalk.gray(' (shift+tab to cycle)');
     const mode = getPromptCycleMode();
     if (mode === 'plan') {
-        return rainbowVoice('⏵⏵ plan mode', ultrathinkAnimationFrame) + suffix;
+        return rainbowVoice('● plan mode', ultrathinkAnimationFrame) + suffix;
     }
     if (mode === 'autoAcceptEdits') {
-        const label = isNewUiEnabled() ? '⏵⏵ accept edits on' : '⏵⏵ auto accept edits on';
+        const label = isNewUiEnabled() ? '● accept edits on' : '● auto accept edits on';
         return chalk.yellow(label) + suffix;
     }
-    return chalk.cyan('⏵⏵ default mode') + suffix;
+    return chalk.cyan('● default mode') + suffix;
 }
 
 function formatPromptStatusLine(width) {
@@ -2921,7 +3011,7 @@ async function main() {
                 await waitForQueuedCliWork();
                 publishCurrentRemoteCapabilities();
             } else {
-                await enqueueUserTurn({ text: trimmed, source: 'cli', titleSource: trimmed });
+                await enqueueInlinePromptTurn(trimmed);
                 await waitForQueuedCliWork();
                 publishCurrentRemoteCapabilities();
             }

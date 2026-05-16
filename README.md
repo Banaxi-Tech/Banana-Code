@@ -50,15 +50,15 @@ For full details, see the [Privacy Policy](https://bananacode.sh/privacy-policy.
 
 ## 🤔 Why Banana Code?
 While tools like Cursor provide great GUI experiences, Banana Code is built for developers who live in the terminal and want maximum flexibility. 
-- **No Vendor Lock-in**: Switch instantly between the best proprietary models (Gemini, Claude, OpenAI) and high-performance open-source models (Ollama Local, Ollama Cloud) mid-conversation.
+- **No Vendor Lock-in**: Switch instantly between the best proprietary models (Gemini, Claude, OpenAI) and high-performance open-source models (Ollama Local, LM Studio, llama.cpp, Ollama Cloud) mid-conversation.
 - **True Autonomy**: With Plan & Execute mode and Self-Healing Error Loops, Banana Code doesn't just suggest code; it tries, fails, reads the errors, and fixes its own mistakes automatically.
 - **Terminal Native**: It brings the power of full workspace awareness, web search, and surgical file patching directly to your CLI without forcing you to change your IDE.
 
 ## ✨ Key Features
 
-- **Multi-Provider Support**: Switch between **Google Gemini**, **Anthropic Claude**, **OpenAI** (API key or ChatGPT / Codex OAuth), **Mistral AI**, **DeepSeek** (V4 Flash and V4 Pro), **Kimi AI** (K2.6 and K2.5), **Qwen** (Qwen 3.6/3.5 via Alibaba Cloud Model Studio), **OpenRouter** (any model ID; see [OpenRouter setup](#openrouter-setup)), **Ollama Cloud**, and **Ollama (Local)** effortlessly.
+- **Multi-Provider Support**: Switch between **Google Gemini**, **Anthropic Claude**, **OpenAI** (API key or ChatGPT / Codex OAuth), **Mistral AI**, **DeepSeek** (V4 Flash and V4 Pro), **Kimi AI** (K2.6 and K2.5), **Qwen** (Qwen 3.6/3.5 via Alibaba Cloud Model Studio), **OpenRouter** (any model ID; see [OpenRouter setup](#openrouter-setup)), **Ollama Cloud**, **Ollama (Local)**, **LM Studio (Local)**, and **llama.cpp Server (Local)** effortlessly.
 - **Auto Mode**: For most providers, pick **Auto Mode** as your model — a small “router” model reads your prompt and chooses which model **and reasoning effort** to use for that turn.
-- **Model Switch Tool**: On supported providers, the AI can recommend switching models mid-conversation and Banana Code asks before applying it. OpenRouter, local Ollama, and local LM Studio are excluded.
+- **Model Switch Tool**: On supported providers, the AI can recommend switching models mid-conversation and Banana Code asks before applying it. OpenRouter, local Ollama, local LM Studio, and local llama.cpp are excluded.
 - **Interactive Terminal Suite**: Move beyond one-shot commands. The AI can now spawn persistent terminal sessions to handle interactive prompts like `npm init`, `git commit` (with editors), or Y/N confirmations in real-time.
 - **Financial Intelligence**: Track your exact API spend and savings. Banana Code uses server-side usage data to show you session costs and how much you've saved via **Prompt Caching**.
 - **Model Context Protocol (MCP)**: Connect Banana Code to any community-built MCP server (like SQLite, GitHub, Google Maps) to give your AI infinite new superpowers via `/beta`.
@@ -92,7 +92,7 @@ On your first run, Banana Code will walk you through a quick setup to configure 
 banana
 ```
 
-You'll need your API keys handy for Gemini, Claude, OpenAI (unless you use ChatGPT sign-in), Mistral, DeepSeek, Kimi AI, Qwen, Ollama Cloud, or OpenRouter. For **Kimi AI**, use your Moonshot/Kimi API key. For **Qwen**, use your DashScope/Qwen API key from Alibaba Cloud Model Studio or Qwen Cloud. For **OpenRouter**, you enter an API key and a custom model ID; Banana Code checks OpenRouter’s model list so the model supports **tool calling** before continuing.
+You'll need your API keys handy for Gemini, Claude, OpenAI (unless you use ChatGPT sign-in), Mistral, DeepSeek, Kimi AI, Qwen, Ollama Cloud, or OpenRouter. For local providers, start Ollama, LM Studio, or `llama-server` first. For **Kimi AI**, use your Moonshot/Kimi API key. For **Qwen**, use your DashScope/Qwen API key from Alibaba Cloud Model Studio or Qwen Cloud. For **OpenRouter**, you enter an API key and a custom model ID; Banana Code checks OpenRouter’s model list so the model supports **tool calling** before continuing.
 
 ## 📖 Usage
 
@@ -128,7 +128,7 @@ While in a chat, use these special commands (type `/help` for the full list):
 
 | Command | What it does |
 |--------|----------------|
-| `/provider` | Switch provider: `gemini`, `claude`, `openai`, `mistral`, `deepseek`, `kimi`, `qwen`, `openrouter`, `ollama_cloud`, `ollama` |
+| `/provider` | Switch provider: `gemini`, `claude`, `openai`, `mistral`, `deepseek`, `kimi`, `qwen`, `openrouter`, `ollama_cloud`, `ollama`, `lmstudio`, `llamacpp` |
 | `/model` | Change model; omit the name to open the menu (includes **Auto Mode** where supported). |
 | `/chats` | Browse and resume saved sessions (auto-titled). |
 | `/clear` | Clear the current conversation (same provider/model). |
@@ -158,6 +158,8 @@ While in a chat, use these special commands (type `/help` for the full list):
 | `/help` | Show all commands. |
 | `/exit` | Quit (also `Ctrl+D` / `Ctrl+C` flow). |
 
+**Inline prompt actions:** Add `action@model` or `action@effort` anywhere in a chat prompt to open that menu before the message is sent. Banana Code removes the marker before sending; `action@effort` only applies to Claude and OpenAI Codex OAuth.
+
 **File context:** Type `@path/to/file` or `@@/absolute/path` in your message to attach file contents to that prompt. Use `@@path/to/image.png` to attach an image (supported by Gemini/Claude/OpenAI/Kimi/Qwen and other multimodal providers/models).
 
 **Prompt mode shortcut:** Press `Shift+Tab` in the normal input box to cycle `default mode`, `auto accept edits on`, and `plan mode`.
@@ -169,9 +171,9 @@ While in a chat, use these special commands (type `/help` for the full list):
 **GitHub integration:** Type `/github` to connect through the Banana Code GitHub App backend. The backend must be configured with `GITHUB_APP_ID`, `GITHUB_APP_SLUG`, and either `GITHUB_APP_PRIVATE_KEY_PATH` or `GITHUB_APP_PRIVATE_KEY`; the GitHub App setup URL should point to `https://your-backend.example/api/github/connect/callback`. The CLI stores only an opaque Banana integration token locally, while the backend keeps the GitHub App private key server-side and exchanges it for short-lived installation tokens.
 
 ### ⚡ Auto Mode
-When **Auto Mode** is selected as the model (`/model` or initial setup), each new user message is first sent to a **small, fast router model** (per provider) together with the **last seven conversation messages** (formatted as context only). The router returns JSON: which concrete model should handle **this** turn and a short reason—so short follow-ups like “Implement it” can pick a capable model when the history shows a large task. The assistant’s reply then uses that model. If routing fails, providers fall back to a sensible default (e.g. Gemini may fall back to **Gemini 3 Flash**). **OpenRouter** and **local Ollama** do not offer Auto Mode (fixed model ID vs. local tag list).
+When **Auto Mode** is selected as the model (`/model` or initial setup), each new user message is first sent to a **small, fast router model** (per provider) together with the **last seven conversation messages** (formatted as context only). The router returns JSON: which concrete model should handle **this** turn and a short reason—so short follow-ups like “Implement it” can pick a capable model when the history shows a large task. The assistant’s reply then uses that model. If routing fails, providers fall back to a sensible default (e.g. Gemini may fall back to **Gemini 3 Flash**). **OpenRouter**, **local Ollama**, **local LM Studio**, and **local llama.cpp** do not offer Auto Mode.
 
-Supported providers also expose a `request_model_switch` tool. The AI can call it when the current model is clearly overpowered, underpowered, too slow, or too expensive for the task. Banana Code then asks whether to use the recommended model for the rest of the current turn or continue with the current model. Future messages return to the configured model unless another switch is approved. This is available for Gemini, Claude, OpenAI, Mistral, DeepSeek, Kimi, Qwen, and Ollama Cloud; it is disabled for OpenRouter, local Ollama, and local LM Studio.
+Supported providers also expose a `request_model_switch` tool. The AI can call it when the current model is clearly overpowered, underpowered, too slow, or too expensive for the task. Banana Code then asks whether to use the recommended model for the rest of the current turn or continue with the current model. Future messages return to the configured model unless another switch is approved. This is available for Gemini, Claude, OpenAI, Mistral, DeepSeek, Kimi, Qwen, and Ollama Cloud; it is disabled for OpenRouter, local Ollama, local LM Studio, and local llama.cpp.
 
 ### Kimi AI setup
 
@@ -188,6 +190,16 @@ Select models like **Claude Opus 4.6 (Fast Mode)** from the `/model` menu to dra
 ### OpenRouter setup
 
 [OpenRouter](https://openrouter.ai) lets you use many models behind one API. In Banana Code, choose **OpenRouter** in `/provider`, paste your OpenRouter API key, then enter a **model ID** (e.g. `org/model:free`). Banana Code loads OpenRouter’s public model list and checks that the model advertises tool support (`tools` / `tool_choice` in `supported_parameters`) so Banana’s tools can run. Routing uses the same OpenAI-compatible Chat Completions API at `https://openrouter.ai/api/v1`.
+
+### llama.cpp setup
+
+Start a local llama.cpp server first, for example:
+
+```bash
+llama-server -m /path/to/model.gguf --host 127.0.0.1 --port 8080
+```
+
+Then choose **llama.cpp Server (Local)** from `/provider`, enter the base URL (`http://127.0.0.1:8080` or `http://127.0.0.1:8080/v1`), and pick one of the model IDs returned by the server. Banana Code uses llama.cpp's OpenAI-compatible `/v1/chat/completions` and `/v1/models` endpoints.
 
 ### 🎛️ Operating modes
 Banana Code layers **behavior modes** on top of the normal agent. Only one “style” mode is active at a time (`/plan`, `/ask`, `/security`, `/skill-creator`, or default agent). The status bar shows **PLAN MODE**, **ASK MODE**, or **SECURITY MODE** when relevant.

@@ -15,7 +15,7 @@ import {
 
 export const MODEL_SWITCH_TOOL_NAME = 'request_model_switch';
 
-const EXCLUDED_MODEL_SWITCH_PROVIDERS = new Set(['openrouter', 'ollama', 'lmstudio']);
+const EXCLUDED_MODEL_SWITCH_PROVIDERS = new Set(['openrouter', 'ollama', 'lmstudio', 'llamacpp']);
 
 export function getModelSwitchProviderId(config = {}) {
     return config?.bananaSplit?.enabled && config.bananaSplit.local?.provider

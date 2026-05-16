@@ -7,8 +7,8 @@ import { sendRemoteToolEvent } from '../remote.js';
 import chalk from 'chalk';
 import ora from 'ora';
 
-export async function execCommand({ command, cwd = process.cwd() }) {
-    const perm = await requestPermission('Execute Command', command);
+export async function execCommand({ command, cwd = process.cwd(), why = '' }) {
+    const perm = await requestPermission('Execute Command', command, { why });
     if (!perm.allowed) {
         sendRemoteToolEvent({ actionType: 'Execute Command', details: command, status: 'denied' });
         return `User denied permission to execute: ${command}`;
