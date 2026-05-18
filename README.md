@@ -67,7 +67,7 @@ While tools like Cursor provide great GUI experiences, Banana Code is built for 
 - **ImageGen Support**: Configure a local Stable Diffusion/OpenAI-compatible image server with `/imagegen` so the AI can generate image assets, choose steps, save files, and stream progress previews to API clients.
 - **GitHub App Integration**: Connect `/github` to a Banana Code backend with your GitHub App installed, then let the AI read repositories, inspect files, comment on issues/PRs, review PRs, or merge PRs with your approval.
 - **Self-Healing Loop**: If the AI runs a command (like running tests) and it fails, Banana Code automatically feeds the error trace back to the AI so it can fix its own code.
-- **Agent Skills**: Teach your AI specialized workflows. Drop a `SKILL.md` file in your config folder, and the AI will automatically activate it when relevant.
+- **Agent Skills**: Teach your AI specialized workflows. Drop a `SKILL.md` file in your config folder, or ship bundled skills in the Banana Code install directory, and the AI will automatically activate them when relevant.
 - **Smart Context & Pruning**: Use `@file/path.js` to instantly inject file contents, auto-feed your workspace, and use `/clean` to instantly compress long chat histories to save tokens.
 - **Web Research**: Deep integration with DuckDuckGo APIs and Scrapers to give the AI real-time access to the internet.
 - **Persistent Sessions**: All chats are auto-titled and saved. Use `/chats` for a fully interactive menu to resume any past session.
@@ -134,6 +134,7 @@ While in a chat, use these special commands (type `/help` for the full list):
 | `/clear` | Clear the current conversation (same provider/model). |
 | `/clean` | Summarize long history into a short memory to save tokens (beta; enable in `/beta`). |
 | `/copy` | Copy Banana Code's last message to your clipboard. |
+| `/feedback` | Send product feedback to Banana Code. Add text inline or run `/feedback` for a prompt. |
 | `/voice` | Record speech, transcribe with Groq Whisper or OpenRouter GPT-4o Transcribe, then send the transcript to the AI. |
 | `/imagegen` | Configure Stable Diffusion image generation. The AI gets a `generate_image` tool that writes generated images to requested files. |
 | `/github` | Connect a GitHub App installation. Enables GitHub tools after browser authorization. |
@@ -141,7 +142,7 @@ While in a chat, use these special commands (type `/help` for the full list):
 | `/settings` | Workspace auto-feed, markdown/syntax output, patch tool, token count, global memory, optional Puppeteer URL fetch. |
 | `/beta` | Beta tools (e.g. MCP, optional scrapers, `/clean`). |
 | `/memory` | View, add, or delete global memories (needs memory enabled in `/settings`). |
-| `/skills` | List loaded Agent Skills from `~/.config/banana-code/skills/`. |
+| `/skills` | List loaded Agent Skills from `~/.config/banana-code/skills/` and bundled install-directory `skills/`. Use `/skills defaults` to enable or disable bundled default skills. |
 | `/init` | Generate `BANANA.md` project summary in the current directory. |
 | `/permissions` | List permissions granted for this session. |
 | `/style` | Change AI writing style (Normal, Explanatory, Formal). |
@@ -289,7 +290,15 @@ Banana Code can assist you by:
 Version 2.0.0 introduces **Stateful Terminal Interaction**. When the AI runs a command that doesn't exit immediately (like a configuration wizard or a long-running dev server), it maintains a persistent session. The AI can then "see" the prompt from the terminal and send the appropriate response (e.g., typing a project name into `npm init` or answering `Y` to a deletion prompt).
 
 ### 🧠 Agent Skills
-Banana Code supports custom Agent Skills. Skills are like "onboarding guides" that teach the AI how to do specific tasks, use certain APIs, or follow your company's coding standards. 
+Banana Code supports custom Agent Skills. Skills are like "onboarding guides" that teach the AI how to do specific tasks, use certain APIs, or follow your company's coding standards.
+
+Banana Code loads skills from two places:
+- User skills in `~/.config/banana-code/skills/`
+- Bundled skills in the Banana Code install directory's `skills/` folder
+
+If both locations define a skill with the same folder name or frontmatter `name`, the user skill wins and the bundled skill is skipped.
+
+Bundled skills can opt out of being available by default with `defaultAutoLoad: false` in `SKILL.md`. Run `/skills defaults` to enable or disable bundled default skills without changing user-installed skills.
 
 When the AI detects a task that matches a skill's description, it automatically activates the skill and loads its specialized instructions.
 

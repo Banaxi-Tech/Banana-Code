@@ -830,7 +830,7 @@ export function getAvailableTools(config = {}) {
             if (!allowedForBananaSplitReview.includes(tool.name)) return false;
         }
         if (config.askMode) {
-            const forbiddenInAskMode = ['write_file', 'patch_file', 'change_banana_setting'];
+            const forbiddenInAskMode = ['write_file', 'patch_file', 'create_directory', 'change_banana_setting'];
             if (forbiddenInAskMode.includes(tool.name)) return false;
         }
         if (config.deepReviewMode === 'full' || config.deepReviewMode === 'diff') {
@@ -995,7 +995,7 @@ export async function executeTool(name, args, config) {
         case 'duck_duck_go': return await duckDuckGo(args);
         case 'duck_duck_go_scrape': return await duckDuckGoScrape(args);
         case 'patch_file': return await patchFile(args);
-        case 'activate_skill': return await activateSkill(args);
+        case 'activate_skill': return await activateSkill(args, config);
         case 'delegate_task': return await delegateTask(args, config);
         case 'bananasplit_review': return await bananasplitReview(args, config);
         case 'save_memory': return await saveMemoryTool(args);

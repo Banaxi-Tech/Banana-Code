@@ -3,8 +3,8 @@
 
 import { getAvailableSkills } from '../utils/skills.js';
 
-export async function activateSkill({ skillName }) {
-    const skills = getAvailableSkills();
+export async function activateSkill({ skillName }, config = {}) {
+    const skills = getAvailableSkills({ config });
     // Match by ID or Name
     const skill = skills.find(s => s.id === skillName || s.name === skillName);
     

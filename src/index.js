@@ -38,6 +38,7 @@ import { cleanupVoiceClip, getVoiceApiKey, getVoiceConfig, getVoiceProvider, get
 import { setRuntimeModelOverride } from './utils/modelSwitch.js';
 import { disconnectGitHubIntegration, setupGitHubIntegration, showGitHubStatus } from './github.js';
 import { queueNewUiAssistantMarker } from './utils/newUi.js';
+import { submitFeedback } from './feedback.js';
 
 let config;
 let providerInstance;
@@ -951,6 +952,29 @@ async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {
             }
             break;
         }
+        case '/feedback': {
+            let feedbackText = args.join(' ').trim();
+
+            if (!feedbackText) {
+                const { input } = await import('@inquirer/prompts');
+                feedbackText = await input({
+                    message: 'What feedback should Banana Code send?',
+                    validate: (value) => String(value || '').trim().length > 0 || 'Feedback cannot be empty'
+                });
+            }
+
+            const spinner = ora({ text: 'Sending feedback...', color: 'yellow', stream: process.stdout }).start();
+            try {
+                const result = await submitFeedback(feedbackText, config);
+                spinner.stop();
+                console.log(chalk.green(`Feedback sent. Thank you.`) + chalk.gray(result.id ? ` (${result.id})` : ''));
+            } catch (err) {
+                spinner.stop();
+                console.log(chalk.red(`Feedback failed: ${err.message}`));
+                console.log(chalk.gray('You can set FEEDBACK_API_URL to test against another backend.'));
+            }
+            break;
+        }
         case '/model':
             let newModel = args[0];
             const isBananaSplitModelChange = config.bananaSplit?.enabled && config.bananaSplit.local?.provider;
@@ -1541,19 +1565,65 @@ async function handleSlashCommand(command, { runUserTurn = enqueueUserTurn } = {
             console.log(chalk.magenta(`Debug mode ${config.debug ? 'enabled' : 'disabled'}.`));
             break;
         case '/skills':
-            const { getAvailableSkills } = await import('./utils/skills.js');
-            const skills = getAvailableSkills();
+            const { getAvailableSkills, getBundledSkills, isBundledSkillEnabled, BUNDLED_SKILLS_DIR, USER_SKILLS_DIR } = await import('./utils/skills.js');
+
+            if ((args[0] || '').toLowerCase() === 'defaults') {
+                const bundledSkills = getBundledSkills();
+
+                if (bundledSkills.length === 0) {
+                    console.log(chalk.yellow("No bundled default skills found."));
+                    console.log(chalk.gray(`Bundled skills can be shipped in ${BUNDLED_SKILLS_DIR}`));
+                    break;
+                }
+
+                const { checkbox } = await import('@inquirer/prompts');
+                const selectedSkillIds = await checkbox({
+                    message: 'Select bundled default skills to make available to the AI:',
+                    choices: bundledSkills.map(skill => ({
+                        name: `${skill.id}${skill.defaultAutoLoad === false ? ' (default off)' : ''} - ${skill.description}`,
+                        value: skill.id,
+                        checked: isBundledSkillEnabled(skill, config)
+                    })),
+                    loop: false,
+                    pageSize: Math.min(Math.max(bundledSkills.length, 8), 20)
+                });
+
+                const selected = new Set(selectedSkillIds);
+                const enabled = [];
+                const disabled = [];
+
+                for (const skill of bundledSkills) {
+                    const isSelected = selected.has(skill.id);
+                    if (isSelected && skill.defaultAutoLoad === false) {
+                        enabled.push(skill.id);
+                    } else if (!isSelected && skill.defaultAutoLoad !== false) {
+                        disabled.push(skill.id);
+                    }
+                }
+
+                config.defaultSkills = { enabled, disabled };
+                await saveConfig(config);
+
+                if (providerInstance && typeof providerInstance.updateSystemPrompt === 'function') {
+                    providerInstance.updateSystemPrompt(getSystemPrompt(config));
+                }
+
+                console.log(chalk.green(`Default skills updated. Enabled: ${selectedSkillIds.join(', ') || 'none'}`));
+                break;
+            }
+
+            const skills = getAvailableSkills({ config });
             if (skills.length === 0) {
                 console.log(chalk.yellow("No skills found."));
-                const os = await import('os');
-                const path = await import('path');
-                const skillsDir = path.join(os.homedir(), '.config', 'banana-code', 'skills');
-                console.log(chalk.gray(`Create skill directories with a SKILL.md file in ${skillsDir}`));
+                console.log(chalk.gray(`Create skill directories with a SKILL.md file in ${USER_SKILLS_DIR}`));
+                console.log(chalk.gray(`Bundled skills can also be shipped in ${BUNDLED_SKILLS_DIR}`));
+                console.log(chalk.gray(`Run /skills defaults to enable or disable bundled default skills.`));
             } else {
                 console.log(chalk.cyan.bold("\nLoaded Skills:"));
                 skills.forEach(skill => {
                     console.log(chalk.green(`- ${skill.id}`) + `: ${skill.description}`);
                 });
+                console.log(chalk.gray("\nRun /skills defaults to enable or disable bundled default skills."));
             }
             break;
         case '/goals':
@@ -2109,6 +2179,7 @@ Available commands:
   /clear           - Clear chat history
   /clean           - Compress chat history into a summary to save tokens
   /copy            - Copy Banana Code's last message to your clipboard
+  /feedback [text] - Send product feedback to Banana Code
   /voice           - Record speech, transcribe with the configured voice provider, then ask the AI
   /voice setup     - Configure Groq or OpenRouter transcription
   /voice <file>    - Transcribe an audio file and ask the AI
@@ -2123,6 +2194,7 @@ Available commands:
   /beta            - Manage beta features and tools
   /settings        - Manage app settings (workspace auto-feed, etc)
   /skills          - List loaded agent skills
+  /skills defaults - Enable or disable bundled default skills
   /memory          - Manage global AI memories
   /init            - Generate a BANANA.md project summary file
   /import-instructions - Merge AGENTS.md/CLAUDE.md/GEMINI.md into BANANA.md
