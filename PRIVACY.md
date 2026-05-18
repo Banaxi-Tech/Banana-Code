@@ -1,8 +1,8 @@
 # 🍌 Banana Code Privacy Policy
 
-**Last updated: May 11, 2026**
+**Last updated: May 18, 2026**
 
-**Updated Privacy Policy:** This update reflects Banana Code Remote phone-to-CLI chat, optional image attachments, and optional GitHub App integration.
+**Updated Privacy Policy:** This update reflects Banana Code Remote phone-to-CLI chat, optional image attachments, optional GitHub App integration, and optional CLI feedback submission.
 
 ## 1. Overview
 
@@ -30,6 +30,19 @@ All chat history and session files are stored **locally only** in your home dire
 ### 2.4 Workspace & File Contents
 
 Banana Code reads your local files when you use `@file` mentions, `write_file`, `patch_file`, or the workspace auto-feed feature. This content is sent directly from your machine to the AI provider you have configured (e.g. Anthropic, Google, OpenAI, DeepSeek, Kimi AI, Qwen, or your local llama.cpp server). We do not intercept, store, or process this data.
+
+### 2.5 Optional Feedback Submission
+
+When you run `/feedback`, Banana Code sends the feedback text you enter to `bananacode.sh` so the project maintainer can review product feedback and bug reports.
+
+The feedback request includes:
+
+- The feedback message you type.
+- A source label (`banana-code-cli`).
+- Basic CLI/runtime metadata: Banana Code version when available, configured provider, configured model, authentication type, operating system platform, and operating system release.
+- Request metadata collected by the server: timestamp, IP address, and User-Agent.
+
+Feedback is optional. Banana Code does **not** automatically include chat history, local file contents, API keys, terminal output, or workspace data in feedback submissions. Do not include secrets or private code in feedback unless you intentionally want to send that information to the maintainer.
 
 ## 3. Banana Code Remote (Android App) — Data Collected
 
@@ -94,13 +107,15 @@ When the AI uses GitHub tools, API requests are sent through the backend so it c
 - All API requests and Socket.IO connections are authenticated with per-device **Bearer tokens**. Tokens are stored only as SHA-256 hashes on the server; the plain-text value never leaves your device.
 - GitHub integration tokens are also stored only as SHA-256 hashes on the server. GitHub installation access tokens are short-lived and cached in memory only.
 - Passwords are stored using **scrypt** (memory-hard key derivation). They are never stored in plain text.
-- Data is stored in an SQLite database on the server.
+- Remote and GitHub integration data is stored in an SQLite database on the server.
+- CLI feedback submissions are stored in a server-side JSONL file and can be viewed only through a maintainer-only, password-protected feedback feed. The feedback feed uses a bcrypt-hashed maintainer password and HMAC-signed session cookies.
 - No third-party analytics, advertising networks, or data brokers receive your data.
-- Access to the server and database is restricted to the project maintainer.
+- Access to the server, database, and feedback feed is restricted to the project maintainer.
 
 ## 6. Data Retention
 
 - Tool requests and text messages are stored for session debugging and remote message history. Phone image bytes are forwarded transiently and are not stored in message history. There is currently no automatic deletion schedule for stored text/tool data. You may request deletion at any time.
+- CLI feedback submissions are stored for product improvement and bug triage. There is currently no automatic deletion schedule for feedback submissions. You may request deletion at any time by describing the feedback text or approximate submission date.
 - Pairing codes are automatically deleted after use or after 5 minutes.
 - GitHub connection sessions expire after 5 minutes. GitHub integration token records remain until you disconnect GitHub or request deletion.
 - The installation ping counter only stores an aggregate number — no per-request history is kept.
@@ -119,6 +134,7 @@ You have the right to:
 
 - Request a copy of data associated with your UUID.
 - Request deletion of your account UUID and all associated data from our relay server.
+- Request deletion of feedback you submitted through `/feedback`.
 - Disconnect Banana Remote at any time using `/remotetooling disconnect` in the CLI.
 - Disconnect GitHub at any time using `/github disconnect` in the CLI.
 

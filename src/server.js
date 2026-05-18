@@ -502,9 +502,10 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
     });
 
     let config = initialConfig || await loadConfig({ includeProjectLocal: true });
-    let providerInstance = null;
+    let httpProviderInstance = null;
     let httpVoiceSessionId = null;
     let ultraMemoryInterval = null;
+    let apiTurnQueue = Promise.resolve();
     global.bananaConfig = config;
 
     const getBaseApiRuntimeConfig = () => ({
@@ -524,40 +525,62 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
         })(req, res, next);
     };
 
-    async function sendApiChatMessage(text, workspace = process.cwd()) {
-        if (!providerInstance) {
-            providerInstance = createProviderForConfig(createProvider, config);
-        }
-        global.activeProviderInstance = providerInstance;
-
-        providerInstance.config.isApiMode = true;
-        providerInstance.onChunk = null;
-        providerInstance.onToolStart = null;
-        providerInstance.onToolEnd = null;
-        providerInstance.config.onImageGenProgress = null;
-        providerInstance.config.onImageGenResult = null;
-
-        const preparedInput = await prepareChatInput(text, [], workspace);
-        const providerInput = preparedInput.images.length > 0
-            ? { text: preparedInput.text, images: preparedInput.images }
-            : preparedInput.text;
-        const response = await providerInstance.sendMessage(providerInput);
-
-        if (!httpVoiceSessionId) httpVoiceSessionId = generateSessionId();
-        const titleSource = String(text || '').trim() || 'Voice message';
-        await saveSession(httpVoiceSessionId, {
-            messages: providerInstance.messages,
-            provider: config.provider,
-            model: config.model,
-            title: titleSource.substring(0, 50) + (titleSource.length > 50 ? '...' : '')
+    async function runExclusiveApiTurn(fn) {
+        const previousTurn = apiTurnQueue;
+        let releaseTurn;
+        apiTurnQueue = new Promise(resolve => {
+            releaseTurn = resolve;
         });
 
-        let usage = null;
-        if (typeof providerInstance.calculateSessionCost === 'function') {
-            usage = providerInstance.calculateSessionCost();
+        await previousTurn.catch(() => {});
+        try {
+            return await fn();
+        } finally {
+            releaseTurn();
         }
+    }
 
-        return { response, usage, sessionId: httpVoiceSessionId };
+    async function sendApiChatMessage(text, workspace = process.cwd()) {
+        if (!httpProviderInstance) {
+            httpProviderInstance = createProviderForConfig(createProvider, config);
+        }
+        const previousActiveProvider = global.activeProviderInstance;
+        global.activeProviderInstance = httpProviderInstance;
+
+        try {
+            httpProviderInstance.config.isApiMode = true;
+            httpProviderInstance.onChunk = null;
+            httpProviderInstance.onToolStart = null;
+            httpProviderInstance.onToolEnd = null;
+            httpProviderInstance.config.onImageGenProgress = null;
+            httpProviderInstance.config.onImageGenResult = null;
+
+            const preparedInput = await prepareChatInput(text, [], workspace);
+            const providerInput = preparedInput.images.length > 0
+                ? { text: preparedInput.text, images: preparedInput.images }
+                : preparedInput.text;
+            const response = await httpProviderInstance.sendMessage(providerInput);
+
+            if (!httpVoiceSessionId) httpVoiceSessionId = generateSessionId();
+            const titleSource = String(text || '').trim() || 'Voice message';
+            await saveSession(httpVoiceSessionId, {
+                messages: httpProviderInstance.messages,
+                provider: config.provider,
+                model: config.model,
+                title: titleSource.substring(0, 50) + (titleSource.length > 50 ? '...' : '')
+            });
+
+            let usage = null;
+            if (typeof httpProviderInstance.calculateSessionCost === 'function') {
+                usage = httpProviderInstance.calculateSessionCost();
+            }
+
+            return { response, usage, sessionId: httpVoiceSessionId };
+        } finally {
+            if (global.activeProviderInstance === httpProviderInstance) {
+                global.activeProviderInstance = previousActiveProvider;
+            }
+        }
     }
 
     const updateUltraMemoryBackground = async (wasEnabled, isEnabled) => {
@@ -584,9 +607,9 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
         }
 
         const runtimeConfig = getBaseApiRuntimeConfig();
-        if (providerInstance?.config) {
-            providerInstance.config = { ...providerInstance.config, ...runtimeConfig, ...updates };
-            await refreshSystemPrompt(providerInstance, runtimeConfig);
+        if (httpProviderInstance?.config) {
+            httpProviderInstance.config = { ...httpProviderInstance.config, ...runtimeConfig, ...updates };
+            await refreshSystemPrompt(httpProviderInstance, runtimeConfig);
         }
 
         if (updates.useUltraMemory !== undefined && config.useUltraMemory && !previousUltraMemory && !config.ultraMemoryEnabledAt) {
@@ -630,6 +653,7 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
         const activeTickets = new Set();
         let currentWorkspace = process.cwd();
         let currentSessionId = null;
+        let providerInstance = null;
         const browserBridge = new BrowserBridge(ws);
 
         const getApiRuntimeConfig = () => ({
@@ -1167,133 +1191,148 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
                 }
                 
                 if (data.type === 'chat') {
-                    // Set the global handler just before sending a message to ensure it's routed to THIS socket
-                    global.apiPermissionHandler = sessionPermissionHandler;
-                    const originalUserText = String(data.text || '');
-                    let effectiveUserText = originalUserText;
-                    let ultrathinkEnabled = false;
+                    await runExclusiveApiTurn(async () => {
+                        const previousPermissionHandler = global.apiPermissionHandler;
+                        const previousActiveProvider = global.activeProviderInstance;
 
-                    if (!currentSessionId) {
-                        providerInstance = createProviderForConfig(createProvider, getApiRuntimeConfig());
-                    } else if (shouldRecreateProviderForBrowser()) {
-                        const previousConfig = providerInstance.config || config;
-                        providerInstance = reinitializeProviderPreservingHistory(providerInstance, createProvider, previousConfig, getApiRuntimeConfig());
-                        await refreshSystemPrompt(providerInstance, getApiRuntimeConfig());
-                    }
+                        try {
+                            // Set the global handler just before sending a message to ensure it's routed to THIS socket
+                            global.apiPermissionHandler = sessionPermissionHandler;
+                            const originalUserText = String(data.text || '');
+                            let effectiveUserText = originalUserText;
+                            let ultrathinkEnabled = false;
 
-                    if (!providerInstance) {
-                        console.log(chalk.gray(`[API] Creating provider instance...`));
-                        providerInstance = createProviderForConfig(createProvider, getApiRuntimeConfig());
-                    }
-                    global.activeProviderInstance = providerInstance;
+                            if (!currentSessionId) {
+                                providerInstance = createProviderForConfig(createProvider, getApiRuntimeConfig());
+                            } else if (shouldRecreateProviderForBrowser()) {
+                                const previousConfig = providerInstance.config || config;
+                                providerInstance = reinitializeProviderPreservingHistory(providerInstance, createProvider, previousConfig, getApiRuntimeConfig());
+                                await refreshSystemPrompt(providerInstance, getApiRuntimeConfig());
+                            }
 
-                    const activeProviderConfig = getBananaSplitLocalConfig(getApiRuntimeConfig());
-                    const ultrathinkDirective = extractUltrathinkDirective(effectiveUserText);
-                    if (ultrathinkDirective.enabled) {
-                        effectiveUserText = ultrathinkDirective.text;
-                        if (providerSupportsUltrathink(activeProviderConfig)) {
-                            ultrathinkEnabled = true;
-                        }
-                    }
+                            if (!providerInstance) {
+                                console.log(chalk.gray(`[API] Creating provider instance...`));
+                                providerInstance = createProviderForConfig(createProvider, getApiRuntimeConfig());
+                            }
+                            global.activeProviderInstance = providerInstance;
 
-                    // Attach a temporary listener for this specific request
-                    providerInstance.config = {
-                        ...providerInstance.config,
-                        ...getApiRuntimeConfig()
-                    };
-                    attachRuntimeModelSwitchHandler();
-                    providerInstance.onChunk = (chunk) => {
-                        if (ws.readyState === ws.OPEN) {
-                            ws.send(JSON.stringify({ type: 'chunk', content: chunk }));
-                        }
-                    };
-                    providerInstance.onToolStart = (tool) => {
-                        if (ws.readyState === ws.OPEN) {
-                            ws.send(JSON.stringify({ type: 'tool_start', tool }));
-                        }
-                    };
-                    providerInstance.onToolEnd = (result) => {
-                        if (ws.readyState === ws.OPEN) {
-                            ws.send(JSON.stringify({ type: 'tool_end', result }));
-                        }
-                    };
-                    const generatedImages = [];
-                    providerInstance.config.onImageGenProgress = (payload) => {
-                        if (ws.readyState === ws.OPEN) {
-                            ws.send(JSON.stringify({ type: 'image_generation_progress', ...payload }));
-                        }
-                    };
-                    providerInstance.config.onImageGenResult = (payload) => {
-                        if (Array.isArray(payload?.images)) {
-                            generatedImages.push(...payload.images);
-                        }
-                        if (ws.readyState === ws.OPEN) {
-                            ws.send(JSON.stringify({ type: 'image_generation_result', ...payload }));
-                        }
-                    };
+                            const activeProviderConfig = getBananaSplitLocalConfig(getApiRuntimeConfig());
+                            const ultrathinkDirective = extractUltrathinkDirective(effectiveUserText);
+                            if (ultrathinkDirective.enabled) {
+                                effectiveUserText = ultrathinkDirective.text;
+                                if (providerSupportsUltrathink(activeProviderConfig)) {
+                                    ultrathinkEnabled = true;
+                                }
+                            }
 
-                    console.log(chalk.gray(`[API] Sending message to AI...`));
-                    const preparedInput = await prepareChatInput(effectiveUserText, data.attachments || [], currentWorkspace, data.browserElements || []);
-                    if (preparedInput.dropped.length > 0 && ws.readyState === ws.OPEN) {
-                        ws.send(JSON.stringify({
-                            type: 'attachments_dropped',
-                            attachments: preparedInput.dropped.map(({ rawPath, resolvedPath, reason }) => ({
-                                path: rawPath,
-                                resolvedPath: resolvedPath || null,
-                                reason
-                            }))
-                        }));
-                    }
-                    if (!currentSessionId) currentSessionId = generateSessionId();
-                    const activeProviderId = getActiveProviderId(config);
-                    const titleSource = originalUserText.trim() || (Array.isArray(data.browserElements) && data.browserElements.length > 0 ? 'Browser element edit' : (preparedInput.images.length > 0 ? 'Image attachment' : 'File attachment'));
-                    const sessionTitle = titleSource.substring(0, 50) + (titleSource.length > 50 ? '...' : '');
-                    const pendingMessages = appendPendingUserMessage(
-                        providerInstance.messages,
-                        buildPendingUserMessage(activeProviderId, preparedInput, getApiRuntimeConfig())
-                    );
+                            // Attach a temporary listener for this specific request
+                            providerInstance.config = {
+                                ...providerInstance.config,
+                                ...getApiRuntimeConfig()
+                            };
+                            attachRuntimeModelSwitchHandler();
+                            providerInstance.onChunk = (chunk) => {
+                                if (ws.readyState === ws.OPEN) {
+                                    ws.send(JSON.stringify({ type: 'chunk', content: chunk }));
+                                }
+                            };
+                            providerInstance.onToolStart = (tool) => {
+                                if (ws.readyState === ws.OPEN) {
+                                    ws.send(JSON.stringify({ type: 'tool_start', tool }));
+                                }
+                            };
+                            providerInstance.onToolEnd = (result) => {
+                                if (ws.readyState === ws.OPEN) {
+                                    ws.send(JSON.stringify({ type: 'tool_end', result }));
+                                }
+                            };
+                            const generatedImages = [];
+                            providerInstance.config.onImageGenProgress = (payload) => {
+                                if (ws.readyState === ws.OPEN) {
+                                    ws.send(JSON.stringify({ type: 'image_generation_progress', ...payload }));
+                                }
+                            };
+                            providerInstance.config.onImageGenResult = (payload) => {
+                                if (Array.isArray(payload?.images)) {
+                                    generatedImages.push(...payload.images);
+                                }
+                                if (ws.readyState === ws.OPEN) {
+                                    ws.send(JSON.stringify({ type: 'image_generation_result', ...payload }));
+                                }
+                            };
 
-                    await saveSession(currentSessionId, {
-                        messages: pendingMessages,
-                        provider: activeProviderId,
-                        model: config.model,
-                        title: sessionTitle
+                            console.log(chalk.gray(`[API] Sending message to AI...`));
+                            const preparedInput = await prepareChatInput(effectiveUserText, data.attachments || [], currentWorkspace, data.browserElements || []);
+                            if (preparedInput.dropped.length > 0 && ws.readyState === ws.OPEN) {
+                                ws.send(JSON.stringify({
+                                    type: 'attachments_dropped',
+                                    attachments: preparedInput.dropped.map(({ rawPath, resolvedPath, reason }) => ({
+                                        path: rawPath,
+                                        resolvedPath: resolvedPath || null,
+                                        reason
+                                    }))
+                                }));
+                            }
+                            if (!currentSessionId) currentSessionId = generateSessionId();
+                            const activeProviderId = getActiveProviderId(config);
+                            const titleSource = originalUserText.trim() || (Array.isArray(data.browserElements) && data.browserElements.length > 0 ? 'Browser element edit' : (preparedInput.images.length > 0 ? 'Image attachment' : 'File attachment'));
+                            const sessionTitle = titleSource.substring(0, 50) + (titleSource.length > 50 ? '...' : '');
+                            const pendingMessages = appendPendingUserMessage(
+                                providerInstance.messages,
+                                buildPendingUserMessage(activeProviderId, preparedInput, getApiRuntimeConfig())
+                            );
+
+                            await saveSession(currentSessionId, {
+                                messages: pendingMessages,
+                                provider: activeProviderId,
+                                model: config.model,
+                                title: sessionTitle
+                            });
+
+                            if (ws.readyState === ws.OPEN) {
+                                ws.send(JSON.stringify({
+                                    type: 'session_started',
+                                    sessionId: currentSessionId,
+                                    title: sessionTitle
+                                }));
+                            }
+
+                            const providerInput = { text: preparedInput.text, images: preparedInput.images, ultrathink: ultrathinkEnabled };
+                            const response = await providerInstance.sendMessage(preparedInput.images.length > 0 || ultrathinkEnabled ? providerInput : preparedInput.text);
+                            console.log(chalk.gray(`[API] AI response complete.`));
+
+                            // Save the session to disk
+                            await saveSession(currentSessionId, {
+                                messages: providerInstance.messages,
+                                provider: activeProviderId,
+                                model: config.model,
+                                title: sessionTitle
+                            });
+
+                            let financial = null;
+                            if (typeof providerInstance.calculateSessionCost === 'function') {
+                                financial = providerInstance.calculateSessionCost();
+                            }
+
+                            if (ws.readyState === ws.OPEN) {
+                                ws.send(JSON.stringify({
+                                    type: 'done',
+                                    finalResponse: response,
+                                    usage: financial,
+                                    sessionId: currentSessionId,
+                                    generatedImages
+                                }));
+                            }
+                        } finally {
+                            if (global.apiPermissionHandler === sessionPermissionHandler) {
+                                global.apiPermissionHandler = previousPermissionHandler;
+                            }
+                            if (global.activeProviderInstance === providerInstance) {
+                                global.activeProviderInstance = previousActiveProvider;
+                            }
+                        }
                     });
-
-                    if (ws.readyState === ws.OPEN) {
-                        ws.send(JSON.stringify({
-                            type: 'session_started',
-                            sessionId: currentSessionId,
-                            title: sessionTitle
-                        }));
-                    }
-
-                    const providerInput = { text: preparedInput.text, images: preparedInput.images, ultrathink: ultrathinkEnabled };
-                    const response = await providerInstance.sendMessage(preparedInput.images.length > 0 || ultrathinkEnabled ? providerInput : preparedInput.text);
-                    console.log(chalk.gray(`[API] AI response complete.`));
-                    
-                    // Save the session to disk
-                    await saveSession(currentSessionId, {
-                        messages: providerInstance.messages,
-                        provider: activeProviderId,
-                        model: config.model,
-                        title: sessionTitle
-                    });
-
-                    let financial = null;
-                    if (typeof providerInstance.calculateSessionCost === 'function') {
-                        financial = providerInstance.calculateSessionCost();
-                    }
-
-                    if (ws.readyState === ws.OPEN) {
-                        ws.send(JSON.stringify({ 
-                            type: 'done', 
-                            finalResponse: response,
-                            usage: financial,
-                            sessionId: currentSessionId,
-                            generatedImages
-                        }));
-                    }
+                    return;
                 }
             } catch (err) {
                 console.error(chalk.red(`[API] Error: ${err.message}`));
@@ -1427,7 +1466,7 @@ export async function startApiServer(port = 3000, createProvider, host = '127.0.
             const messageText = prefix.trim()
                 ? `${prefix.trim()}\n\nVoice transcript:\n${transcript}`
                 : transcript;
-            const chatResult = await sendApiChatMessage(messageText);
+            const chatResult = await runExclusiveApiTurn(() => sendApiChatMessage(messageText));
 
             res.json({
                 type: 'voice_done',

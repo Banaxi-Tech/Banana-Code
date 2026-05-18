@@ -28,9 +28,10 @@ Type these into the chat to control the app:
 - /settings   : Manage features like Auto-feed workspace, Syntax highlighting, Memory, and optional Puppeteer URL fetch.
 - /beta       : Enable beta features like MCP (Model Context Protocol) and search tools.
 - /memory     : View or manage global AI memories.
-- /skills     : List loaded agent skills (custom expert behaviors).
+- /skills     : List loaded agent skills (custom expert behaviors). Use '/skills defaults' to enable or disable bundled default skills.
 - /init       : Generate a BANANA.md file that summarizes your project for the AI.
 - /clear      : Clear current chat history.
+- /feedback   : Send product feedback to Banana Code. Use '/feedback your message' or run '/feedback' for a prompt.
 - /help       : Show this help message.
 - /exit       : Quit the application.
 

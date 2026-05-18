@@ -16,6 +16,7 @@ const GOALS_AUTO_ACTIONS = new Set([
     'Read File',
     'Write File',
     'Patch File',
+    'Create Directory',
     'Rename File',
     'List Directory',
     'Search in',
@@ -194,6 +195,16 @@ function getNewUiPermissionCopy(actionType, details, options = {}) {
             once: 'Yes, rename it',
             session: 'Yes, allow file renames this session',
             disallow: 'No, do not rename it'
+        };
+    }
+    if (actionType === 'Create Directory') {
+        return {
+            title: 'Create directory',
+            target,
+            question: `Do you want to create ${target}?`,
+            once: 'Yes, create directory',
+            session: 'Yes, allow directory creation this session',
+            disallow: 'No, do not create it'
         };
     }
     if (actionType === 'Delegate Task') {

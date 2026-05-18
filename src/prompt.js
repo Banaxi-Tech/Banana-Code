@@ -24,7 +24,7 @@ export function getSystemPrompt(config = {}) {
     const availableToolsNames = availableToolsList.map(t => t.name).join(', ');
     const hasPatchTool = availableToolsList.some(t => t.name === 'patch_file');
     const hasBrowserUse = availableToolsList.some(t => t.name === 'browser_open');
-    const skills = getAvailableSkills();
+    const skills = getAvailableSkills({ config });
 
     let prompt = `You are Banana Code, a terminal-based AI coding assistant running on ${osDescription}. You help users write, debug, and understand code. You have access to tools: ${availableToolsNames}. 
 

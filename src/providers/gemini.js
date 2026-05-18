@@ -242,7 +242,7 @@ export class GeminiProvider {
                             if (content && content.parts) {
                                 for (const part of content.parts) {
                                     if (part.text) {
-                                        if (spinner.isSpinning && !this.config.useMarkedTerminal) spinner.stop();
+                                        if (spinner && spinner.isSpinning && !this.config.useMarkedTerminal) spinner.stop();
                                         if (!this.config.useMarkedTerminal) {
                                             if (this.config.isApiMode && this.onChunk) {
                                                 this.onChunk(part.text);
@@ -268,7 +268,7 @@ export class GeminiProvider {
                                         // Visual feedback for streaming tool arguments
                                         const call = part.functionCall;
                                         const argSize = JSON.stringify(call.args || {}).length;
-                                        if (!spinner.isSpinning) {
+                                        if (!spinner || !spinner.isSpinning) {
                                             spinner = ora({ text: `Generating ${chalk.yellow(call.name)} arguments (${argSize} bytes)...`, color: 'yellow', stream: process.stdout }).start();
                                         } else {
                                             spinner.text = `Generating ${chalk.yellow(call.name)} arguments (${argSize} bytes)...`;
